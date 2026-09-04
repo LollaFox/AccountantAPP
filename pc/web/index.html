@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>小票同步中心</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #1f2933;
+      --muted: #64727d;
+      --line: #dce3e7;
+      --surface: #ffffff;
+      --band: #f4f7f8;
+      --teal: #0f766e;
+      --teal-soft: #dff2ef;
+      --coral: #c9573f;
+      --coral-soft: #fae9e5;
+      --green: #277a45;
+      --green-soft: #e4f2e8;
+      --amber: #9a6816;
+      --amber-soft: #fff2d5;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--band); color: var(--ink); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; letter-spacing: 0; }
+    button, input, select, textarea { font: inherit; letter-spacing: 0; }
+    button { cursor: pointer; }
+    header { background: #234e52; color: white; }
+    .header-inner, main { width: min(1180px, calc(100% - 32px)); margin: 0 auto; }
+    .header-inner { min-height: 68px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    h1 { margin: 0; font-size: 22px; }
+    .header-actions, .toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    main { padding: 22px 0 48px; }
+    .button { min-height: 38px; border: 1px solid var(--line); border-radius: 6px; padding: 8px 13px; background: white; color: var(--ink); }
+    .button:hover { border-color: #9fb0b9; }
+    .button.primary { background: var(--teal); color: white; border-color: var(--teal); }
+    .button.danger { color: var(--coral); border-color: #e7b8ad; }
+    .month { min-height: 38px; border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; background: white; }
+    .toolbar { justify-content: space-between; margin-bottom: 16px; }
+    .status { color: var(--muted); }
+    .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 22px; }
+    .metric { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; min-height: 92px; }
+    .metric span { color: var(--muted); display: block; margin-bottom: 8px; }
+    .metric strong { display: block; font-size: 24px; text-align: right; }
+    .metric.income { border-top: 4px solid var(--green); }
+    .metric.expense { border-top: 4px solid var(--coral); }
+    .metric.balance { border-top: 4px solid var(--teal); }
+    .metric.pending { border-top: 4px solid var(--amber); }
+    .section { margin-top: 22px; }
+    .section-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+    h2 { margin: 0; font-size: 16px; }
+    .two-column { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .panel { background: white; border: 1px solid var(--line); border-radius: 6px; overflow: auto; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 10px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
+    th { background: #eef4f4; color: #31545a; font-weight: 650; }
+    td.money, th.money { text-align: right; font-variant-numeric: tabular-nums; }
+    tbody tr:last-child td { border-bottom: 0; }
+    .empty { padding: 24px; text-align: center; color: var(--muted); }
+    .badge { display: inline-block; border-radius: 4px; padding: 2px 7px; background: var(--band); color: var(--muted); white-space: nowrap; }
+    .badge.review { background: var(--amber-soft); color: var(--amber); }
+    .badge.confirmed { background: var(--green-soft); color: var(--green); }
+    .badge.error { background: var(--coral-soft); color: var(--coral); }
+    .badge.income { background: var(--green-soft); color: var(--green); }
+    .badge.expense { background: var(--coral-soft); color: var(--coral); }
+    .actions { white-space: nowrap; text-align: right; }
+    .transaction-detail { min-width: 190px; }
+    dialog { width: min(720px, calc(100% - 24px)); max-height: calc(100vh - 40px); overflow: auto; border: 1px solid var(--line); border-radius: 8px; padding: 0; box-shadow: 0 18px 60px rgba(31, 41, 51, .2); }
+    dialog::backdrop { background: rgba(31, 41, 51, .45); }
+    .dialog-head { position: sticky; top: 0; z-index: 1; display: flex; justify-content: space-between; align-items: center; gap: 12px; background: #234e52; color: white; padding: 14px 18px; }
+    .dialog-head h2 { font-size: 17px; }
+    .dialog-body { padding: 18px; }
+    .dialog-actions { position: sticky; bottom: 0; display: flex; justify-content: flex-end; gap: 8px; background: white; border-top: 1px solid var(--line); padding: 12px 18px; }
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    label { display: grid; gap: 5px; color: var(--muted); }
+    label.full { grid-column: 1 / -1; }
+    input, select, textarea { width: 100%; min-height: 38px; border: 1px solid #bcc9cf; border-radius: 5px; padding: 8px 9px; background: white; color: var(--ink); }
+    textarea { min-height: 70px; resize: vertical; }
+    .item-grid { display: grid; grid-template-columns: minmax(0, 1fr) 130px; gap: 8px; margin-bottom: 8px; }
+    .notice { padding: 10px 12px; background: var(--amber-soft); color: #6f511c; border-radius: 5px; margin-bottom: 14px; }
+    code { overflow-wrap: anywhere; color: #175c58; }
+    @media (max-width: 760px) {
+      .metrics { grid-template-columns: 1fr 1fr; }
+      .two-column { grid-template-columns: 1fr; }
+      .form-grid { grid-template-columns: 1fr; }
+      label.full { grid-column: auto; }
+      .header-inner { align-items: flex-start; flex-direction: column; padding: 14px 0; }
+    }
+    @media (max-width: 440px) {
+      .metrics { grid-template-columns: 1fr; }
+      .metric { min-height: 78px; }
+      .header-inner, main { width: min(100% - 20px, 1180px); }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <h1>小票同步中心</h1>
+      <div class="header-actions">
+        <button class="button" id="pairButton">手机配对</button>
+        <button class="button" id="uploadButton">导入小票</button>
+        <input id="receiptFile" type="file" accept="image/jpeg,image/png" hidden>
+        <button class="button primary" id="manualButton">新增收支</button>
+      </div>
+    </div>
+  </header>
+  <main>
+    <div class="toolbar">
+      <div>
+        <input class="month" id="month" type="month">
+        <button class="button" id="refreshButton">刷新</button>
+      </div>
+      <span class="status" id="status">正在读取电脑数据…</span>
+    </div>
+
+    <section class="metrics" aria-label="月度汇总">
+      <div class="metric income"><span>总收入</span><strong id="income">HK$0.00</strong></div>
+      <div class="metric expense"><span>总支出</span><strong id="expense">HK$0.00</strong></div>
+      <div class="metric balance"><span>结余</span><strong id="balance">HK$0.00</strong></div>
+      <div class="metric pending"><span>待处理小票</span><strong id="pending">0</strong></div>
+    </section>
+
+    <section class="section two-column">
+      <div>
+        <div class="section-title"><h2>支出大类</h2></div>
+        <div class="panel" id="expenseCategories"></div>
+      </div>
+      <div>
+        <div class="section-title"><h2>收入大类</h2></div>
+        <div class="panel" id="incomeCategories"></div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-title"><h2>收支流水</h2><span class="status">显示当前所选月份</span></div>
+      <div class="panel" id="transactions"></div>
+    </section>
+
+    <section class="section">
+      <div class="section-title"><h2>小票处理队列</h2><span class="status">审核确认后才计入上方汇总</span></div>
+      <div class="panel" id="receipts"></div>
+    </section>
+  </main>
+
+  <dialog id="manualDialog">
+    <div class="dialog-head"><h2>新增收支</h2><button class="button" data-close="manualDialog">关闭</button></div>
+    <form id="manualForm">
+      <div class="dialog-body form-grid">
+        <label>类型<select name="kind"><option value="income">收入</option><option value="expense">支出</option></select></label>
+        <label>日期<input type="date" name="date" required></label>
+        <label>大类<input name="category" placeholder="例如：工资、餐饮、交通" required></label>
+        <label>金额（HKD）<input type="number" name="amount" min="0" step="0.01" required></label>
+        <label class="full">说明<input name="content" placeholder="例如：八月工资"></label>
+        <label class="full">备注<textarea name="notes"></textarea></label>
+      </div>
+      <div class="dialog-actions"><button type="button" class="button" data-close="manualDialog">取消</button><button class="button primary" type="submit">保存</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="pairDialog">
+    <div class="dialog-head"><h2>iPhone 配对信息</h2><button class="button" data-close="pairDialog">关闭</button></div>
+    <div class="dialog-body">
+      <div class="notice">服务器地址使用 HTTPS、电脑的局域网 IP 和下列端口。手机还会固定核对证书指纹，防止公共 Wi‑Fi 上的设备冒充电脑。</div>
+      <p>电脑名称：<strong id="computerName">—</strong></p>
+      <p>服务器地址：<code id="pairAddresses">—</code></p>
+      <p>协议：<code id="pairScheme">—</code></p>
+      <p>端口：<code id="pairPort">—</code></p>
+      <p>同步密钥：<code id="pairToken">—</code></p>
+      <p>证书 SHA‑256：<code id="pairFingerprint">—</code></p>
+    </div>
+  </dialog>
+
+  <dialog id="reviewDialog">
+    <div class="dialog-head"><h2>审核小票</h2><button class="button" data-close="reviewDialog">关闭</button></div>
+    <form id="reviewForm">
+      <div class="dialog-body">
+        <div id="reviewWarnings"></div>
+        <div class="form-grid">
+          <label>日期<input type="datetime-local" name="occurred_at"></label>
+          <label>金额（HKD）<input type="number" name="amount" min="0" step="0.01" required></label>
+          <label>大类<input name="category" required></label>
+          <label>场景<input name="scene"></label>
+          <label>商户<input name="merchant"></label>
+          <label>支付账户<input name="payment_account"></label>
+          <label class="full">消费内容<input name="content"></label>
+          <label class="full">备注<textarea name="notes"></textarea></label>
+        </div>
+        <h2 style="margin:18px 0 8px">支出分项</h2>
+        <div id="reviewItems"></div>
+      </div>
+      <div class="dialog-actions"><button type="button" class="button" data-close="reviewDialog">取消</button><button class="button primary" type="submit">确认并计入汇总</button></div>
+    </form>
+  </dialog>
+
+  <script>
+    const $ = (selector) => document.querySelector(selector);
+    const money = (cents) => new Intl.NumberFormat('zh-HK', { style: 'currency', currency: 'HKD' }).format((cents || 0) / 100);
+    const escapeHtml = (value) => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+    let activeReceipt = null;
+
+    function localMonth() {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    }
+    function localDateTimeValue(value) {
+      const date = new Date(value);
+      return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+    }
+    function tableForCategories(rows) {
+      if (!rows?.length) return '<div class="empty">本月暂无记录</div>';
+      return `<table><thead><tr><th>大类</th><th>笔数</th><th class="money">金额</th></tr></thead><tbody>${rows.map(row =>
+        `<tr><td>${escapeHtml(row.category)}</td><td>${row.transaction_count}</td><td class="money">${money(row.amount_cents)}</td></tr>`
+      ).join('')}</tbody></table>`;
+    }
+    function badge(status) {
+      const labels = { queued:'待上传', processing:'识别中', review:'待审核', confirmed:'已确认', error:'错误' };
+      return `<span class="badge ${escapeHtml(status)}">${labels[status] || escapeHtml(status)}</span>`;
+    }
+    async function api(path, options = {}) {
+      const { headers = {}, ...requestOptions } = options;
+      const response = await fetch(path, { ...requestOptions, headers: { 'Content-Type': 'application/json', ...headers } });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+      return body;
+    }
+    async function refresh() {
+      $('#status').textContent = '正在同步…';
+      try {
+        const month = $('#month').value || localMonth();
+        const [summary, transactionData, receiptData] = await Promise.all([
+          api(`/api/v1/summary?month=${encodeURIComponent(month)}`),
+          api(`/api/v1/transactions?month=${encodeURIComponent(month)}`),
+          api('/api/v1/receipts?limit=50')
+        ]);
+        $('#income').textContent = money(summary.income_cents);
+        $('#expense').textContent = money(summary.expense_cents);
+        $('#balance').textContent = money(summary.balance_cents);
+        $('#pending').textContent = summary.pending_receipts;
+        $('#expenseCategories').innerHTML = tableForCategories(summary.expense_by_category);
+        $('#incomeCategories').innerHTML = tableForCategories(summary.income_by_category);
+        renderTransactions(transactionData.transactions);
+        renderReceipts(receiptData.receipts);
+        $('#status').textContent = summary.updated_at ? `已更新 ${new Date(summary.updated_at).toLocaleString('zh-HK')}` : '尚无已确认记录';
+      } catch (error) {
+        $('#status').textContent = `读取失败：${error.message}`;
+      }
+    }
+    function renderTransactions(rows) {
+      if (!rows.length) { $('#transactions').innerHTML = '<div class="empty">本月暂无收支流水</div>'; return; }
+      $('#transactions').innerHTML = `<table><thead><tr><th>日期</th><th>类型</th><th>大类</th><th>内容 / 商户</th><th class="money">金额</th><th>来源</th><th></th></tr></thead><tbody>${rows.map(row =>
+        `<tr><td>${escapeHtml(new Date(row.occurred_at).toLocaleDateString('zh-HK'))}</td><td><span class="badge ${escapeHtml(row.kind)}">${row.kind === 'income' ? '收入' : '支出'}</span></td><td>${escapeHtml(row.category)}</td><td class="transaction-detail">${escapeHtml(row.content || row.category)}<br><span class="status">${escapeHtml(row.merchant || '')}</span></td><td class="money">${money(row.amount_cents)}</td><td>${row.source === 'receipt' ? '小票' : '手工录入'}</td><td class="actions"><button class="button danger" ${row.source === 'receipt' ? `data-delete-receipt="${escapeHtml(row.receipt_id)}"` : `data-delete-transaction="${escapeHtml(row.id)}"`}>${row.source === 'receipt' ? '删除小票' : '删除此笔'}</button></td></tr>`
+      ).join('')}</tbody></table>`;
+      bindDeleteButtons();
+    }
+    function renderReceipts(rows) {
+      if (!rows.length) { $('#receipts').innerHTML = '<div class="empty">手机上传或电脑导入的小票会出现在这里</div>'; return; }
+      $('#receipts').innerHTML = `<table><thead><tr><th>票面日期 / 导入时间</th><th>商户 / 分类</th><th class="money">金额</th><th>状态</th><th></th></tr></thead><tbody>${rows.map(row =>
+        `<tr><td>${escapeHtml(new Date(row.occurred_at || row.captured_at).toLocaleString('zh-HK'))}${row.occurred_at ? `<br><span class="status">导入：${escapeHtml(new Date(row.captured_at).toLocaleString('zh-HK'))}</span>` : ''}</td><td>${escapeHtml(row.merchant || '等待识别')}<br><span class="status">${escapeHtml(row.category || '')}</span></td><td class="money">${row.amount_cents == null ? '—' : money(row.amount_cents)}</td><td>${badge(row.status)}</td><td class="actions">${row.status === 'review' ? `<button class="button" data-review="${escapeHtml(row.id)}">审核</button> <button class="button" data-reprocess="${escapeHtml(row.id)}">重新识别</button>` : row.status === 'error' ? `<button class="button" data-reprocess="${escapeHtml(row.id)}">重新识别</button>` : ''} <button class="button danger" data-delete-receipt="${escapeHtml(row.id)}">删除</button></td></tr>`
+      ).join('')}</tbody></table>`;
+      document.querySelectorAll('[data-review]').forEach(button => button.addEventListener('click', () => openReview(button.dataset.review)));
+      document.querySelectorAll('[data-reprocess]').forEach(button => button.addEventListener('click', () => reprocess(button.dataset.reprocess)));
+      bindDeleteButtons();
+    }
+    function bindDeleteButtons() {
+      document.querySelectorAll('[data-delete-receipt]').forEach(button => {
+        if (button.dataset.bound) return;
+        button.dataset.bound = '1';
+        button.addEventListener('click', () => deleteReceipt(button.dataset.deleteReceipt));
+      });
+      document.querySelectorAll('[data-delete-transaction]').forEach(button => {
+        if (button.dataset.bound) return;
+        button.dataset.bound = '1';
+        button.addEventListener('click', () => deleteManualTransaction(button.dataset.deleteTransaction));
+      });
+    }
+    async function deleteReceipt(id) {
+      if (!confirm('确定删除整张小票吗？对应流水、商品明细和原始图片都会一并删除，且无法撤销。')) return;
+      $('#status').textContent = '正在删除小票…';
+      try {
+        await api(`/api/v1/receipts/${encodeURIComponent(id)}`, { method:'DELETE' });
+        await refresh();
+        $('#status').textContent = '小票及其关联记录已删除';
+      } catch (error) {
+        $('#status').textContent = `删除失败：${error.message}`;
+      }
+    }
+    async function deleteManualTransaction(id) {
+      if (!confirm('确定删除这笔手工录入吗？删除后无法撤销。')) return;
+      $('#status').textContent = '正在删除记录…';
+      try {
+        await api(`/api/v1/transactions/${encodeURIComponent(id)}`, { method:'DELETE' });
+        await refresh();
+        $('#status').textContent = '手工录入已删除';
+      } catch (error) {
+        $('#status').textContent = `删除失败：${error.message}`;
+      }
+    }
+    async function reprocess(id) {
+      $('#status').textContent = '正在重新识别小票…';
+      await api(`/api/v1/receipts/${encodeURIComponent(id)}/reprocess`, { method:'POST', body:'{}' });
+      await refresh();
+      setTimeout(refresh, 2500);
+    }
+    async function openReview(id) {
+      activeReceipt = await api(`/api/v1/receipts/${encodeURIComponent(id)}`);
+      const tx = activeReceipt.transaction;
+      const form = $('#reviewForm');
+      form.occurred_at.value = localDateTimeValue(tx.occurred_at);
+      form.amount.value = (tx.amount_cents / 100).toFixed(2);
+      for (const key of ['category','scene','merchant','payment_account','content','notes']) form[key].value = tx[key] || '';
+      const warnings = activeReceipt.parsed?.warnings || [];
+      $('#reviewWarnings').innerHTML = warnings.length ? `<div class="notice">${warnings.map(escapeHtml).join('<br>')}</div>` : '';
+      $('#reviewItems').innerHTML = activeReceipt.line_items.length ? activeReceipt.line_items.map((item, index) =>
+        `<div class="item-grid"><input data-item-name="${index}" value="${escapeHtml(item.name)}"><input data-item-amount="${index}" type="number" min="0" step="0.01" value="${(item.amount_cents / 100).toFixed(2)}"></div>`
+      ).join('') : '<div class="empty">没有识别到分项，可只确认主账</div>';
+      $('#reviewDialog').showModal();
+    }
+    $('#reviewForm').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const targetMonth = form.occurred_at.value.slice(0, 7);
+      const items = activeReceipt.line_items.map((item, index) => ({
+        ...item,
+        name: document.querySelector(`[data-item-name="${index}"]`).value,
+        amount_cents: Math.round(Number(document.querySelector(`[data-item-amount="${index}"]`).value) * 100),
+        unit_price_cents: Math.round(Number(document.querySelector(`[data-item-amount="${index}"]`).value) * 100)
+      }));
+      await api(`/api/v1/receipts/${encodeURIComponent(activeReceipt.id)}/confirm`, { method:'POST', body: JSON.stringify({
+        transaction: {
+          ...activeReceipt.transaction,
+          occurred_at: new Date(form.occurred_at.value).toISOString(),
+          amount_cents: Math.round(Number(form.amount.value) * 100),
+          category: form.category.value, scene: form.scene.value, merchant: form.merchant.value,
+          payment_account: form.payment_account.value, content: form.content.value, notes: form.notes.value
+        },
+        line_items: items
+      }) });
+      $('#reviewDialog').close();
+      $('#month').value = targetMonth;
+      await refresh();
+      $('#status').textContent = `已确认并计入 ${targetMonth}`;
+    });
+    $('#manualForm').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const targetMonth = form.date.value.slice(0, 7);
+      await api('/api/v1/transactions', { method:'POST', body: JSON.stringify({
+        occurred_at: new Date(`${form.date.value}T12:00:00`).toISOString(), kind: form.kind.value,
+        category: form.category.value, amount_cents: Math.round(Number(form.amount.value) * 100),
+        content: form.content.value || form.category.value, notes: form.notes.value
+      }) });
+      $('#manualDialog').close();
+      form.reset();
+      $('#month').value = targetMonth;
+      await refresh();
+      $('#status').textContent = `已保存并计入 ${targetMonth}`;
+    });
+    const fileAsBase64 = (file) => new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result).split(',', 2)[1]);
+      reader.onerror = () => reject(new Error('无法读取图片'));
+      reader.readAsDataURL(file);
+    });
+    $('#uploadButton').addEventListener('click', () => $('#receiptFile').click());
+    $('#receiptFile').addEventListener('change', async (event) => {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      if (file.size > 12 * 1024 * 1024) {
+        $('#status').textContent = '导入失败：图片不能超过 12 MB';
+        event.target.value = '';
+        return;
+      }
+      const button = $('#uploadButton');
+      button.disabled = true;
+      $('#status').textContent = '正在导入并识别小票…';
+      try {
+        await api('/api/v1/receipts', {
+          method: 'POST',
+          body: JSON.stringify({
+            id: crypto.randomUUID(),
+            device_id: 'pc-browser',
+            captured_at: new Date(file.lastModified || Date.now()).toISOString(),
+            image_base64: await fileAsBase64(file)
+          })
+        });
+        await refresh();
+        setTimeout(refresh, 2500);
+      } catch (error) {
+        $('#status').textContent = `导入失败：${error.message}`;
+      } finally {
+        button.disabled = false;
+        event.target.value = '';
+      }
+    });
+    $('#pairButton').addEventListener('click', async () => {
+      const pairing = await api('/api/v1/pairing');
+      $('#computerName').textContent = pairing.computer_name;
+      $('#pairAddresses').textContent = (pairing.addresses || []).map(address => `${pairing.scheme}://${address}:${pairing.port}`).join('  ') || '未发现局域网地址';
+      $('#pairScheme').textContent = pairing.scheme;
+      $('#pairPort').textContent = pairing.port;
+      $('#pairToken').textContent = pairing.sync_token;
+      $('#pairFingerprint').textContent = pairing.certificate_sha256;
+      $('#pairDialog').showModal();
+    });
+    $('#manualButton').addEventListener('click', () => { $('#manualForm').date.value = new Date().toISOString().slice(0,10); $('#manualDialog').showModal(); });
+    $('#refreshButton').addEventListener('click', refresh);
+    $('#month').addEventListener('change', refresh);
+    document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => document.getElementById(button.dataset.close).close()));
+    $('#month').value = localMonth();
+    refresh();
+    setInterval(refresh, 15000);
+  </script>
+</body>
+</html>

@@ -1,0 +1,42 @@
+# Local / OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Python
+.cache/
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Windows runtime data: tokens, TLS, receipts, CSV, models
+data/
+dev-data/
+start-test-data/
+tls-test-data/
+pc-local-test/
+images/
+exports/
+paddle_models/
+tls/
+*.pem
+*.key
+*.sqlite3
+*.sqlite
+*.db
+config.json
+receipt-sync-sha256.txt
+
+# iOS / Xcode
+xcuserdata/
+DerivedData/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+*.ipa
+*.dSYM
+*.dSYM.zip
+*.mobileprovision
+*.p12
