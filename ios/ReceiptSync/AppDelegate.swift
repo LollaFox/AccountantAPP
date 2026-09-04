@@ -29,7 +29,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         scheduleBackgroundRefresh()
         let work = Task {
             await ReceiptStore.shared.syncAll()
-            task.setTaskCompleted(success: !Task<Void, Never>.isCancelled)
+            task.setTaskCompleted(success: !Task.isCancelled)
         }
         task.expirationHandler = { work.cancel() }
     }

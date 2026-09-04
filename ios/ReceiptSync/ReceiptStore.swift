@@ -39,9 +39,7 @@ final class ReceiptStore: ObservableObject {
     }
 
     var selectedMonthKey: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM"
-        return formatter.string(from: selectedMonth)
+        HongKongDate.monthKey(from: selectedMonth)
     }
 
     func updateSettings(serverURL: String, syncToken: String, certificateSHA256: String) {
@@ -56,7 +54,7 @@ final class ReceiptStore: ObservableObject {
     }
 
     func moveMonth(_ amount: Int) {
-        selectedMonth = Calendar.current.date(byAdding: .month, value: amount, to: selectedMonth) ?? selectedMonth
+        selectedMonth = HongKongDate.addMonths(amount, to: selectedMonth)
         Task { await refreshSummary() }
     }
 
@@ -136,14 +134,13 @@ final class ReceiptStore: ObservableObject {
     }
 
     func addManual(kind: String, date: Date, category: String, amount: Decimal, content: String, notes: String) async throws {
-        let formatter = ISO8601DateFormatter()
         let rounding = NSDecimalNumberHandler(
             roundingMode: .plain, scale: 0, raiseOnExactness: false,
             raiseOnOverflow: false, raiseOnUnderflow: false, raiseOnDivideByZero: false
         )
         let cents = NSDecimalNumber(decimal: amount * 100).rounding(accordingToBehavior: rounding).intValue
         let request = ManualTransactionRequest(
-            occurredAt: formatter.string(from: date), kind: kind, category: category,
+            occurredAt: HongKongDate.isoString(from: date), kind: kind, category: category,
             amountCents: cents, content: content.isEmpty ? category : content, notes: notes
         )
         try await client.addTransaction(request, settings: settings)

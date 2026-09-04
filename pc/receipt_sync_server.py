@@ -13,6 +13,7 @@ import secrets
 import socket
 import sqlite3
 import ssl
+import sys
 import threading
 import time
 import traceback
@@ -182,6 +183,24 @@ def local_addresses() -> list[str]:
     return sorted(addresses)
 
 
+def default_data_dir() -> Path:
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        return Path(local_app_data) / "ReceiptSync"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "ReceiptSync"
+    return Path.home() / ".local" / "share" / "ReceiptSync"
+
+
+def default_model_cache() -> Path:
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        return Path(local_app_data) / "ReceiptSync" / "paddle_models"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "ReceiptSync" / "paddle_models"
+    return Path.home() / ".cache" / "ReceiptSync" / "paddle_models"
+
+
 @dataclass(frozen=True)
 class AppConfig:
     data_dir: Path
@@ -204,13 +223,7 @@ class AppConfig:
         if config_path.exists():
             stored = json.loads(config_path.read_text(encoding="utf-8"))
         if model_cache is None:
-            local_app_data = os.environ.get("LOCALAPPDATA")
-            shared_cache = (
-                Path(local_app_data) / "ReceiptSync" / "paddle_models"
-                if local_app_data
-                else Path.home() / ".cache" / "ReceiptSync" / "paddle_models"
-            )
-            model_cache = Path(stored.get("model_cache") or shared_cache)
+            model_cache = Path(stored.get("model_cache") or default_model_cache())
         configured_host = host or stored.get("host", "0.0.0.0")
         configured_port = int(port or stored.get("port", 8765))
         sync_token = stored.get("sync_token") or secrets.token_urlsafe(24)
@@ -591,6 +604,10 @@ class PaddleEngine:
         os.environ["HF_HUB_CACHE"] = str(self.cache_dir / "huggingface" / "hub")
         os.environ["HF_XET_CACHE"] = str(self.cache_dir / "huggingface" / "xet")
         os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+        if sys.platform == "darwin":
+            # Paddle's PIR executor has crashed on Apple Silicon; keep CPU inference.
+            os.environ.setdefault("FLAGS_enable_pir_in_executor", "0")
+            os.environ.setdefault("FLAGS_enable_pir_api", "0")
         from paddleocr import PaddleOCR
 
         self.engine = PaddleOCR(
@@ -927,7 +944,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="PaddleOCR receipt sync server")
-    parser.add_argument("--data-dir", type=Path, default=Path(__file__).parent / "data")
+    parser.add_argument("--data-dir", type=Path, default=None)
     parser.add_argument("--host")
     parser.add_argument("--port", type=int)
     parser.add_argument("--model-cache", type=Path)
@@ -940,9 +957,10 @@ def main() -> None:
     parser.add_argument("--initialize-only", action="store_true")
     parser.add_argument("--allow-insecure-http", action="store_true", help="Only for localhost development tests")
     args = parser.parse_args()
-    config = AppConfig.load(args.data_dir.resolve(), args.host, args.port, args.model_cache)
+    data_dir = (args.data_dir or default_data_dir()).resolve()
+    config = AppConfig.load(data_dir, args.host, args.port, args.model_cache)
     if args.initialize_only:
-        print(f"Receipt Sync configuration initialized: {config.data_dir}")
+        print(f"Receipt Sync configuration initialized: {config.data_dir}", flush=True)
         return
     if not args.allow_insecure_http and (not args.cert or not args.key):
         parser.error("--cert and --key are required; use --allow-insecure-http only for localhost tests")
@@ -990,13 +1008,13 @@ def main() -> None:
             daemon=True,
         )
         review_thread.start()
-    print("Receipt Sync is running")
+    print("Receipt Sync is running", flush=True)
     review_url = f"http://127.0.0.1:{args.review_port}" if args.review_port else f"{server.scheme}://127.0.0.1:{config.port}"
-    print(f"Computer review: {review_url}")
-    print(f"iPhone sync token: {config.sync_token}")
+    print(f"Computer review: {review_url}", flush=True)
+    print(f"iPhone sync token: {config.sync_token}", flush=True)
     if server.certificate_sha256 and server.scheme == "https":
-        print(f"Certificate SHA-256: {server.certificate_sha256}")
-    print(f"Data: {config.data_dir}")
+        print(f"Certificate SHA-256: {server.certificate_sha256}", flush=True)
+    print(f"Data: {config.data_dir}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

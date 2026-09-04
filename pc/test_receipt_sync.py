@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import ssl
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
@@ -12,6 +17,8 @@ from receipt_sync_server import (
     Database,
     Handler,
     canonical_receipt_id,
+    default_data_dir,
+    default_model_cache,
     local_addresses,
     month_or_current,
     validate_transaction,
@@ -356,6 +363,23 @@ class ConfigTests(unittest.TestCase):
             )
             self.assertFalse(str(config.model_cache).startswith(str(root / "test-data")))
 
+    def test_missing_localappdata_uses_macos_application_support(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            env = {key: value for key, value in os.environ.items() if key != "LOCALAPPDATA"}
+            with patch.dict("os.environ", env, clear=True), patch("receipt_sync_server.sys.platform", "darwin"):
+                cache = default_model_cache()
+                data = default_data_dir()
+                config = AppConfig.load(root / "test-data", None, None)
+            expected_cache = (
+                Path.home() / "Library" / "Application Support" / "ReceiptSync" / "paddle_models"
+            ).resolve()
+            expected_data = Path.home() / "Library" / "Application Support" / "ReceiptSync"
+            self.assertEqual(cache.resolve(), expected_cache)
+            self.assertEqual(data.resolve(), expected_data.resolve())
+            self.assertEqual(config.model_cache, expected_cache)
+            self.assertFalse(str(config.model_cache).startswith(str(root / "test-data")))
+
     def test_runtime_port_override_keeps_shared_persisted_token(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -424,6 +448,29 @@ class SecurityBoundaryTests(unittest.TestCase):
         for method, path, query in denied:
             with self.subTest(method=method, path=path):
                 self.assertFalse(Handler.remote_endpoint_allowed(method, path, query))
+
+
+class MacOSCertificateTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform != "win32", "OpenSSL helper is for macOS/Linux")
+    def test_generated_certificate_fingerprint_matches_python_tls(self) -> None:
+        script = Path(__file__).resolve().parent / "generate_certificate.sh"
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp)
+            subprocess.run(["bash", str(script), str(output)], check=True, cwd=output)
+            cert_path = output / "receipt-sync-cert.pem"
+            key_path = output / "receipt-sync-key.pem"
+            fingerprint_path = output / "receipt-sync-sha256.txt"
+            self.assertTrue(cert_path.exists())
+            self.assertTrue(key_path.exists())
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
+            context.load_cert_chain(certfile=cert_path, keyfile=key_path)
+            certificate_der = ssl.PEM_cert_to_DER_cert(cert_path.read_text(encoding="ascii"))
+            digest = hashlib.sha256(certificate_der).hexdigest().upper()
+            stored = fingerprint_path.read_text(encoding="ascii").strip().upper()
+            self.assertEqual(stored, digest)
+            self.assertRegex(stored, r"^[0-9A-F]{64}$")
+            self.assertIn("BEGIN RSA PRIVATE KEY", key_path.read_text(encoding="ascii"))
 
 
 if __name__ == "__main__":

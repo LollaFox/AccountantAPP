@@ -26,6 +26,8 @@
     <true/>
     <key>NSCameraUsageDescription</key>
     <string>用于拍摄消费小票并同步到你的电脑。</string>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>在没有相机的设备或模拟器上，用于选择小票照片并同步到你的电脑。</string>
     <key>NSLocalNetworkUsageDescription</key>
     <string>用于连接同一网络中的个人小票识别电脑。</string>
     <key>UIApplicationSceneManifest</key>

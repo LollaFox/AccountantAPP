@@ -19,7 +19,8 @@ private final class PinnedSessionDelegate: NSObject, URLSessionDelegate {
     ) {
         guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
               let trust = challenge.protectionSpace.serverTrust,
-              let certificate = SecTrustGetCertificateAtIndex(trust, 0) else {
+              let chain = SecTrustCopyCertificateChain(trust) as? [SecCertificate],
+              let certificate = chain.first else {
             completionHandler(.performDefaultHandling, nil)
             return
         }
@@ -86,11 +87,10 @@ actor SyncClient {
     }
 
     func upload(receipt: PendingReceipt, imageData: Data, settings: AppSettings) async throws -> RemoteReceipt {
-        let formatter = ISO8601DateFormatter()
         let payload: [String: Any] = [
             "id": receipt.id.uuidString.lowercased(),
             "device_id": settings.deviceID,
-            "captured_at": formatter.string(from: receipt.capturedAt),
+            "captured_at": HongKongDate.isoString(from: receipt.capturedAt),
             "image_base64": imageData.base64EncodedString()
         ]
         let body = try JSONSerialization.data(withJSONObject: payload)

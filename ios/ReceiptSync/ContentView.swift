@@ -84,12 +84,15 @@ struct ContentView: View {
         HStack {
             Button { store.moveMonth(-1) } label: { Image(systemName: "chevron.left") }
                 .buttonStyle(.borderless)
+                .accessibilityLabel("上个月")
             Spacer()
-            Text(store.selectedMonth, format: .dateTime.year().month(.wide))
+            Text(HongKongDate.monthTitle(from: store.selectedMonth))
                 .font(.headline)
+                .accessibilityIdentifier("selectedMonth")
             Spacer()
             Button { store.moveMonth(1) } label: { Image(systemName: "chevron.right") }
                 .buttonStyle(.borderless)
+                .accessibilityLabel("下个月")
         }
         .accessibilityElement(children: .contain)
     }
@@ -206,10 +209,12 @@ struct SettingsView: View {
                     TextField("https://192.168.1.10:8765", text: $serverURL)
                         .textInputAutocapitalization(.never)
                         .keyboardType(.URL)
+                        .accessibilityLabel("电脑地址")
                     SecureField("同步密钥", text: $token)
                     TextField("证书 SHA-256", text: $certificateSHA256, axis: .vertical)
                         .textInputAutocapitalization(.characters)
                         .lineLimit(2...4)
+                        .accessibilityLabel("证书 SHA-256")
                 }
                 Section("设备") {
                     LabeledContent("设备编号", value: store.settings.deviceID)
@@ -256,6 +261,8 @@ struct ManualTransactionView: View {
                 }
                 .pickerStyle(.segmented)
                 DatePicker("日期", selection: $date, displayedComponents: .date)
+                    .environment(\.calendar, HongKongDate.calendar)
+                    .environment(\.timeZone, HongKongDate.timeZone)
                 TextField("大类", text: $category)
                 TextField("金额（HKD）", text: $amount).keyboardType(.decimalPad)
                 TextField("说明", text: $content)

@@ -1,13 +1,13 @@
 # 小票同步
 
-这是一个本地优先的小票录入应用：iPhone 负责拍照、离线排队和查看汇总；Windows 电脑负责 PaddleOCR、人工审核、账目保存及按大类汇总。
+这是一个本地优先的小票录入应用：iPhone 负责拍照、离线排队和查看汇总；Windows 或 macOS 电脑负责 PaddleOCR、人工审核、账目保存及按大类汇总。
 
 ## 当前功能
 
 - iPhone 拍摄小票并保存到本地队列。
 - 拍照后立即同步；电脑不可达时自动保留，回到同一局域网后重试。
 - iOS 后台刷新会机会性重试，但实际时间由系统决定，不能保证精确间隔。
-- Windows 使用现有 PaddleOCR 3.7.0 识别，原图、OCR 原文和结构化结果保存在本机。
+- Windows 或 macOS 使用 PaddleOCR 3.7.0 识别，原图、OCR 原文和结构化结果保存在本机。
 - 小票必须在电脑审核页确认后，才会计入手机汇总。
 - 手机显示月度总收入、总支出、结余、收入大类、支出大类和待处理小票数。
 - 电脑审核页按香港月份显示收支流水；流水标明日期、类型、大类、内容、金额和来源。
@@ -46,6 +46,35 @@ C:\Users\15610\Documents\ChatGPT\DesktopAssistant\.venv-paddle\Scripts\python.ex
 
 在电脑审核页点击“手机配对”，可查看服务器地址、同步密钥和证书 SHA-256 指纹。
 
+## macOS 电脑端
+
+与 Windows 共用同一套 Python 服务、审核页、账务规则和 iPhone API；不要复制 Windows 的数据库、证书或配对令牌。要求 macOS 14 或更高版本，以及 Python 3.9+（建议 3.10–3.12）。首次在本机安装 OCR 环境：
+
+```bash
+chmod +x pc/setup_macos.sh pc/start.sh pc/generate_certificate.sh start-service.command
+./pc/setup_macos.sh
+```
+
+之后在终端运行：
+
+```bash
+./pc/start.sh
+```
+
+也可以双击 `start-service.command`。若系统提示无法打开，可在 Finder 中右键该文件并选择打开。服务运行期间请保持窗口开启；按 `Ctrl+C` 可停止服务。首次绑定 `8765` 时，系统可能弹出防火墙询问，只允许 Python 接受入站连接即可，不要开放审核端口 `8764`。
+
+启动后：
+
+- 电脑审核页：`http://127.0.0.1:8764`
+- iPhone 加密同步端口：`8765`
+- 数据目录：`~/Library/Application Support/ReceiptSync`
+- Paddle 模型：`~/Library/Application Support/ReceiptSync/paddle_models`
+- CSV：`~/Library/Application Support/ReceiptSync/exports`
+
+只测试电脑页面时，可运行 `./pc/test-local.sh` 或双击 `test-local.command`。它使用独立的 `ReceiptSync-LocalTest` 数据目录，只开放 `http://127.0.0.1:8764`，没有 HTTPS，不能用于 iPhone 同步。
+
+换一台电脑或从 Windows 改到 Mac 后，要在 iPhone「同步设置」里重新填写这台 Mac 配对页显示的地址、密钥和证书指纹。
+
 ## iPhone 端
 
 必须在 Mac 上完成签名和安装：
@@ -71,7 +100,7 @@ Windows 无法完成 iOS 签名或生成可直接安装的 `.ipa`。免费 Apple
 - 手机密钥只能上传小票、查询已知小票状态、读取月度汇总和手工记账，不能列出全部流水、读取 OCR 原文、审核、重新识别或删除记录。
 - 审核页、配对信息和删除接口只接受本机回环地址，且会拒绝伪造的 Host 请求。
 - 单张图片限制为 12 MB，只接受 JPEG/PNG；汇总仅统计人工确认记录。
-- Windows 防火墙只需要放行 TCP `8765`，不要开放审核端口 `8764` 或其他端口。
+- Windows 防火墙只需要放行 TCP `8765`，不要开放审核端口 `8764` 或其他端口。macOS 同样只允许入站 TCP `8765`。
 
 当前直连方案不使用 Passkey。Passkey 需要稳定的 HTTPS 域名和关联域，无法可靠绑定校园网中会变化的电脑 IP；它也不适合需要后台自动执行的每次同步。后续如加入固定域名或中转服务，可用 Passkey 完成首次配对或授权电脑端管理操作，再签发上述受限设备凭证。
 
@@ -91,8 +120,12 @@ Windows 无法完成 iOS 签名或生成可直接安装的 `.ipa`。免费 Apple
 pc/
   receipt_sync_server.py   HTTPS、SQLite、汇总和审核服务
   receipt_parser.py        小票金额与餐饮分项规则
-  start.ps1                同时启动本机审核页和手机 HTTPS 接口
-  generate_certificate.ps1
+  start.ps1                Windows：同时启动本机审核页和手机 HTTPS 接口
+  start.sh                 macOS：同上
+  generate_certificate.ps1 Windows 证书生成
+  generate_certificate.sh  macOS OpenSSL 证书生成
+  setup_macos.sh           创建 macOS PaddleOCR 虚拟环境
+  test-local.sh            macOS 本机 HTTP 测试入口
   web/index.html           电脑审核页面
 ios/
   ReceiptSync.xcodeproj

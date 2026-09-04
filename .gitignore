@@ -32,6 +32,7 @@ receipt-sync-sha256.txt
 # iOS / Xcode
 xcuserdata/
 DerivedData/
+ios/build/
 *.xcuserstate
 *.xccheckout
 *.xcscmblueprint
