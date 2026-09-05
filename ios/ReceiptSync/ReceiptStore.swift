@@ -33,9 +33,11 @@ final class ReceiptStore: ObservableObject {
     }
 
     var configured: Bool {
-        settings.serverURL.lowercased().hasPrefix("https://")
-            && !settings.syncToken.isEmpty
-            && settings.certificateSHA256.replacingOccurrences(of: ":", with: "").count == 64
+        PairingInput.isReadyToSync(
+            serverURL: settings.serverURL,
+            syncToken: settings.syncToken,
+            certificateSHA256: settings.certificateSHA256
+        )
     }
 
     var selectedMonthKey: String {
@@ -43,13 +45,26 @@ final class ReceiptStore: ObservableObject {
     }
 
     func updateSettings(serverURL: String, syncToken: String, certificateSHA256: String) {
-        settings.serverURL = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        settings.syncToken = syncToken.trimmingCharacters(in: .whitespacesAndNewlines)
-        settings.certificateSHA256 = certificateSHA256
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: ":", with: "")
-            .uppercased()
+        let remembered = PairingInput.rememberedDraft(
+            serverURL: serverURL,
+            syncToken: syncToken,
+            certificateSHA256: certificateSHA256,
+            storedURL: settings.serverURL,
+            storedToken: settings.syncToken,
+            storedCert: settings.certificateSHA256
+        )
+        settings.serverURL = remembered.serverURL
+        settings.syncToken = remembered.syncToken
+        settings.certificateSHA256 = remembered.certificateSHA256
         settings.save()
+        guard configured else {
+            syncMessage = PairingInput.validationMessage(
+                serverURL: settings.serverURL,
+                syncToken: settings.syncToken,
+                certificateSHA256: settings.certificateSHA256
+            ) ?? "请先设置电脑地址"
+            return
+        }
         Task { await syncAll() }
     }
 

@@ -57,9 +57,12 @@ actor SyncClient {
         method: String = "GET",
         body: Data? = nil
     ) throws -> URLRequest {
-        let base = settings.serverURL.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        guard let url = URL(string: base + path), url.scheme == "https", !settings.syncToken.isEmpty,
-              settings.certificateSHA256.replacingOccurrences(of: ":", with: "").count == 64 else {
+        let base = PairingInput.normalizedURL(settings.serverURL).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard PairingInput.isReadyToSync(
+            serverURL: settings.serverURL,
+            syncToken: settings.syncToken,
+            certificateSHA256: settings.certificateSHA256
+        ), let url = URL(string: base + path), url.scheme == "https" else {
             throw SyncError.invalidServer
         }
         var request = URLRequest(url: url, timeoutInterval: 45)

@@ -1,5 +1,70 @@
 import Foundation
 
+enum PairingInput {
+    static func normalizedURL(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let first = trimmed.split(whereSeparator: { $0.isWhitespace }).first else { return "" }
+        var value = String(first)
+        if !value.contains("://") {
+            value = "https://" + value
+        }
+        return value
+    }
+
+    static func normalizedToken(_ raw: String) -> String {
+        raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func normalizedFingerprint(_ raw: String) -> String {
+        let hex = raw.uppercased().filter(\.isHexDigit)
+        return hex.count > 64 ? String(hex.suffix(64)) : hex
+    }
+
+    static func isReadyToSync(serverURL: String, syncToken: String, certificateSHA256: String) -> Bool {
+        let url = normalizedURL(serverURL)
+        let token = normalizedToken(syncToken)
+        let fingerprint = normalizedFingerprint(certificateSHA256)
+        guard let parsed = URL(string: url), parsed.scheme?.lowercased() == "https", parsed.host != nil else {
+            return false
+        }
+        return !token.isEmpty && fingerprint.count == 64
+    }
+
+    static func rememberedDraft(
+        serverURL: String,
+        syncToken: String,
+        certificateSHA256: String,
+        storedURL: String,
+        storedToken: String,
+        storedCert: String
+    ) -> (serverURL: String, syncToken: String, certificateSHA256: String) {
+        let url = normalizedURL(serverURL)
+        let token = normalizedToken(syncToken)
+        let cert = normalizedFingerprint(certificateSHA256)
+        return (
+            serverURL: url.isEmpty || url == "https://" ? storedURL : url,
+            syncToken: token.isEmpty ? storedToken : token,
+            certificateSHA256: cert.isEmpty ? storedCert : cert
+        )
+    }
+
+    static func validationMessage(serverURL: String, syncToken: String, certificateSHA256: String) -> String? {
+        guard isReadyToSync(serverURL: serverURL, syncToken: syncToken, certificateSHA256: certificateSHA256) else {
+            if !normalizedURL(serverURL).lowercased().hasPrefix("https://") {
+                return "电脑地址必须以 https:// 开头"
+            }
+            if normalizedToken(syncToken).isEmpty {
+                return "请填写同步密钥"
+            }
+            if normalizedFingerprint(certificateSHA256).count != 64 {
+                return "证书指纹应为 64 位十六进制"
+            }
+            return "配对信息不完整，暂不同步"
+        }
+        return nil
+    }
+}
+
 struct AppSettings: Equatable {
     var serverURL: String
     var syncToken: String
@@ -16,7 +81,9 @@ struct AppSettings: Equatable {
         return AppSettings(
             serverURL: defaults.string(forKey: "serverURL") ?? "",
             syncToken: KeychainStore.read(account: "syncToken") ?? "",
-            certificateSHA256: defaults.string(forKey: "certificateSHA256") ?? "",
+            certificateSHA256: KeychainStore.read(account: "certificateSHA256")
+                ?? defaults.string(forKey: "certificateSHA256")
+                ?? "",
             deviceID: deviceID
         )
     }
@@ -26,6 +93,7 @@ struct AppSettings: Equatable {
         UserDefaults.standard.set(certificateSHA256, forKey: "certificateSHA256")
         UserDefaults.standard.set(deviceID, forKey: "deviceID")
         KeychainStore.write(syncToken, account: "syncToken")
+        KeychainStore.write(certificateSHA256, account: "certificateSHA256")
     }
 }
 

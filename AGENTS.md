@@ -101,6 +101,9 @@
 - `start-service.command`：macOS Finder 双击入口，内部调用 `pc/start.sh`。不要再添加根目录 `start-service.sh`。
 - `test-local.cmd`：只启动回环 HTTP 的本地 PC 测试入口，不能用于 iPhone。
 - `test-local.command`：macOS 对应的本机测试入口，内部调用 `pc/test-local.sh`。
+- `ios/install-iphone.sh`：用免费 Apple ID / Personal Team，经 USB 签名并安装到已连接的 iPhone。不需要付费 Developer Program。
+- `ios/install_iphone_support.py`：安装器的设备/团队发现与本地签名文件读写。
+- `install-iphone.command`：Finder 双击入口，内部调用 `ios/install-iphone.sh`。本机签名写入 `ios/install-local.env`（gitignore），不要提交。
 
 ### 手机端
 
@@ -120,9 +123,12 @@
 - `ios/ReceiptSync/AppDelegate.swift`：后台刷新注册与调度。
 - `ios/ReceiptSync/CameraPicker.swift`：系统相机封装；模拟器回退相册。
 - `ios/ReceiptSync/Info.plist`：相机、相册、本地网络和后台模式声明。
+- `ios/ReceiptSync/Assets.xcassets`：iPhone 应用图标（1024×1024 不透明 PNG，青绿底、白小票、确认勾）。
 - `ios/ReceiptSyncTests/HongKongDateTests.swift`：香港月份边界、ISO 偏移和 HKD 格式。
 - `ios/ReceiptSyncUITests/ReceiptSyncUITests.swift`：模拟器界面与可选的热点实机配对测试（无配对环境则 skip）。
 - `ios/ReceiptSync.xcodeproj/xcshareddata/xcschemes/ReceiptSync.xcscheme`：共享 scheme，含 unit/UI test。
+- `ios/install-iphone.sh` / `install-iphone.command`：免费 Apple ID 的 USB 真机安装。
+- `pc/test_iphone_installer.py`：安装脚本语法、免费账号说明、设备/团队解析和本地 env 安全写入。
 
 ## 5. 解析和账务规则，不得回退
 
@@ -207,15 +213,16 @@ Windows 防火墙只应按需要放行入站 TCP 8765。不要开放 8764。校�
 
 ## 9. 如何在 Mac 安装并测试 iPhone 端
 
-前提：Mac 安装 Xcode 16 或更高版本；真机运行 iOS 17 或更高版本。Windows 无法签名 iPhone 应用。
+前提：Mac 安装 Xcode 16 或更高版本；真机运行 iOS 17 或更高版本；一条 USB 线。不需要付费 Apple Developer Program。用 iPhone / App Store 同一个免费 Apple ID，Xcode 会创建 Personal Team。Windows 无法签名 iPhone 应用。
 
 1. 当前 Mac 仓库已包含 `ios/ReceiptSync.xcodeproj`。不要从 Windows 拷贝运行数据、TLS 私钥或配对令牌。
-2. 在 Mac 用 Xcode 打开 `ios/ReceiptSync.xcodeproj`。
-3. 选择 `ReceiptSync` target，在 Signing & Capabilities 中选择用户自己的 Apple Team。
-4. 把默认 `com.local.receiptsync` 改成用户账户下唯一的 Bundle Identifier。
-5. 连接并信任 iPhone，选择该真机作为 Run Destination，然后 Build & Run。
-6. 若电脑端跑在同一台 Mac 上，启动 `./pc/start.sh`；若仍使用 Windows，则在 Windows 上启动 `start-service.cmd`。确保手机与电脑位于同一可互访局域网。
-7. 在 iPhone 应用“同步设置”中填写电脑配对页当时显示的完整 `https://<IP>:8765`、同步密钥和 64 位十六进制证书 SHA-256 指纹。
+2. 用 USB 连接 iPhone，解锁，点“信任此电脑”。在 Xcode 打开 Window → Devices and Simulators，等到这台 iPhone 出现。开发者模式在 Xcode 认出手机之前通常是隐藏的；出现后在设置 → 隐私与安全性最底部，不在「通用」。
+3. 若 Xcode 还没有 Apple ID：打开 Xcode → Settings → Accounts → `+`，登录免费 Apple ID。不要为此去购买开发者账号。
+4. 双击 `install-iphone.command`，或运行 `./ios/install-iphone.sh`。若第一次安装才弹出开发者模式，打开后重启，再跑一次安装器。安装器会自动签名、装到这台已连接的 iPhone，并把团队/Bundle/设备写到 gitignored 的 `ios/install-local.env`。
+5. 若 App 无法打开：设置 → 通用 → VPN与设备管理，信任该开发者。免费签名大约 7 天过期，再跑一次安装器即可。
+6. 备选：仍可用 Xcode 打开工程，选中该 iPhone 后按 Run。不要把 Team ID、令牌或指纹写进仓库。
+7. 若电脑端跑在同一台 Mac 上，启动 `./pc/start.sh`；若仍使用 Windows，则在 Windows 上启动 `start-service.cmd`。确保手机与电脑位于同一可互访局域网。
+8. 在 iPhone 应用“同步设置”中填写电脑配对页当时显示的完整 `https://<IP>:8765`、同步密钥和 64 位十六进制证书 SHA-256 指纹。
 
 建议按以下顺序验收：
 
@@ -228,13 +235,13 @@ Windows 防火墙只应按需要放行入站 TCP 8765。不要开放 8764。校�
 7. 暂停电脑服务后再拍一张，确认手机保留失败队列；恢复服务后下拉刷新，确认可重试。
 8. 校园 Wi-Fi 无法直连时，让电脑连接 iPhone 个人热点重新测试。这是网络客户端隔离问题，不应通过关闭 TLS、取消证书固定或扩大远程权限绕过。
 
-免费 Apple ID 的开发签名通常需要定期重新安装；长期自用或分发需要合适的 Apple Developer 账号。用户已明确暂时不要打包，因此不要在未被要求时创建 `.ipa`、TestFlight 流程或发布配置。
+免费 Apple ID 的开发签名通常约 7 天过期，用 USB 再跑 `install-iphone.command` 即可。用户已要求本机 USB 安装器，但不需要付费 Developer Program，也不要创建 App Store / TestFlight 发布配置或提交 `.ipa`、`install-local.env`。长期对外分发才需要付费账号。
 
 ## 10. 验证基线
 
 截至 2026-09-04：
 
-- 24 个 Python 自动化测试通过，含 macOS 默认模型缓存路径和 OpenSSL 证书指纹回归。
+- Python 自动化测试通过，含 macOS 默认模型缓存路径、OpenSSL 证书指纹回归和 iOS 应用图标规格。
 - Python 语法检查通过。
 - `start.ps1` 和 `generate_certificate.ps1` 可在 Windows PowerShell 5.1 解析。
 - PowerShell 5.1 与 macOS OpenSSL 生成的证书和 RSA 私钥可被 Python TLS 加载，计算出的证书 SHA-256 与保存指纹一致。
@@ -304,7 +311,7 @@ xcodebuild test -project ios/ReceiptSync.xcodeproj -scheme ReceiptSync -configur
 - macOS 电脑端尚未用真实小票跑完第一次 PaddleOCR（模型会在首次识别时下载到 `~/Library/Application Support/ReceiptSync/paddle_models`）。
 - 尚未接入 DeepSeek 或其他第三方商品分类服务。
 - 尚未实现 Passkey、外出同步、云中转、Tailscale 或 VPN。
-- 尚未打包或发布。
+- 尚未做 App Store / TestFlight / 付费账号分发。本机 USB 安装器已加上，但仍需用户在 Xcode 登录免费 Apple ID 并插上 iPhone 后才能完成第一次真机安装。
 
 后续若要接入 AI 分类，先明确数据是否允许离开电脑、供应商密钥如何保存、失败时的本地回退、费用和可审计性。默认应保持本地 PaddleOCR 和人工审核；不要让模型分类结果绕过人工确认，也不要把服务费或舍入重新拆成虚假商品。
 
@@ -320,9 +327,9 @@ xcodebuild test -project ios/ReceiptSync.xcodeproj -scheme ReceiptSync -configur
 - 修改解析器时添加真实版式的最小化 OCR 行回归测试，覆盖坐标关系和金额合计。
 - 修改 API 权限时更新 `test_phone_token_has_only_required_endpoints` 一类安全边界测试。
 - 修改 iOS 同步状态时同时检查离线重试、重复上传幂等、远端删除 404 和本地图片生命周期。
-- 除非用户明确要求，暂不打包、发布、上传云端或引入第三方数据处理。
+- 除非用户明确要求，暂不打包、发布、上传云端或引入第三方数据处理。用户已要求本机 iPhone USB 安装器；继续使用免费 Apple ID / Personal Team，不要改成付费账号、TestFlight 或 App Store 流程。
 - 不要复制一份独立的 macOS Python 服务器；电脑端逻辑以 `pc/` 下的共享文件为准，只用 shell 脚本处理路径、证书和启动。
-- 不要重新添加根目录 `start-service.sh`。终端启动用 `./pc/start.sh`，Finder 用 `start-service.command`。
+- 不要重新添加根目录 `start-service.sh`。终端启动用 `./pc/start.sh`，Finder 用 `start-service.command`。iPhone 安装用 `./ios/install-iphone.sh` 或 `install-iphone.command`。
 
 ## 14. 2026-09-04 进度（macOS 电脑端）
 
@@ -379,4 +386,5 @@ xcodebuild test -project ios/ReceiptSync.xcodeproj -scheme ReceiptSync -configur
 - 没有接 iPhone 真机，没有测相机、真机 Keychain、真机本地网络弹窗、后台刷新。
 - 没有在模拟器上测拍小票上传、电脑确认入账、电脑删除后 404 清队列、电脑停机后的离线队列。
 - 没有改 Bundle Identifier / Apple Team；真机运行前仍需用户自己签名。
+- 2026-09-05：已加上免费 Apple ID 的 USB 安装器（`install-iphone.command` / `ios/install-iphone.sh`）。此 Mac 的 Xcode Accounts 仍为空，当时也没有插上 iPhone，因此安装器还不能代替用户完成第一次签名登录和真机安装。不要提交 `ios/install-local.env`。
 

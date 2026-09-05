@@ -23,8 +23,11 @@ final class ReceiptSyncUITests: XCTestCase {
     func testSettingsSheetValidatesHTTPSPairingFields() {
         app.buttons["设置"].tap()
         XCTAssertTrue(app.navigationBars["同步设置"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.secureTextFields["同步密钥"].exists)
-        XCTAssertFalse(app.buttons["保存"].isEnabled)
+        XCTAssertTrue(app.textFields["同步密钥"].exists)
+        XCTAssertTrue(app.buttons["保存"].isEnabled)
+        app.buttons["保存"].tap()
+        XCTAssertTrue(app.navigationBars["同步设置"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.staticTexts["pairingError"].waitForExistence(timeout: 2))
         app.buttons["取消"].tap()
         XCTAssertTrue(app.navigationBars["收支"].waitForExistence(timeout: 3))
     }
@@ -76,22 +79,22 @@ final class ReceiptSyncUITests: XCTestCase {
         app.buttons["设置"].tap()
         XCTAssertTrue(app.navigationBars["同步设置"].waitForExistence(timeout: 3))
         let save = app.buttons["保存"]
-        XCTAssertFalse(save.isEnabled)
+        XCTAssertTrue(save.isEnabled)
+        save.tap()
+        XCTAssertTrue(app.staticTexts["pairingError"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.navigationBars["同步设置"].exists)
 
         let url = app.textFields["电脑地址"]
         url.tap()
         url.typeText("https://192.0.2.10:8765")
-        XCTAssertFalse(save.isEnabled)
-
-        app.secureTextFields["同步密钥"].tap()
-        app.secureTextFields["同步密钥"].typeText("device-token")
-        XCTAssertFalse(save.isEnabled)
-
+        app.textFields["同步密钥"].tap()
+        app.textFields["同步密钥"].typeText("device-token")
         let fingerprint = app.textFields["证书 SHA-256"]
         fingerprint.tap()
         fingerprint.typeText("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
         XCTAssertTrue(save.isEnabled)
         app.buttons["取消"].tap()
+        XCTAssertTrue(app.navigationBars["收支"].waitForExistence(timeout: 3))
     }
 
     func testLiveHotspotPairingAndSummary() throws {
@@ -113,7 +116,7 @@ final class ReceiptSyncUITests: XCTestCase {
         }
         urlField.typeText(url)
 
-        let tokenField = app.secureTextFields["同步密钥"]
+        let tokenField = app.textFields["同步密钥"]
         tokenField.tap()
         tokenField.typeText(token)
 

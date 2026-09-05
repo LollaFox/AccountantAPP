@@ -76,7 +76,13 @@ struct ContentView: View {
             CameraPicker { image in Task { await store.enqueue(image: image) } }
                 .ignoresSafeArea()
         }
-        .sheet(isPresented: $showingSettings) { SettingsView() }
+        .sheet(isPresented: $showingSettings) {
+            SettingsView(
+                serverURL: store.settings.serverURL,
+                token: store.settings.syncToken,
+                certificateSHA256: store.settings.certificateSHA256
+            )
+        }
         .sheet(isPresented: $showingManual) { ManualTransactionView() }
     }
 
@@ -198,9 +204,18 @@ private struct ReceiptRow: View {
 struct SettingsView: View {
     @EnvironmentObject private var store: ReceiptStore
     @Environment(\.dismiss) private var dismiss
-    @State private var serverURL = ""
-    @State private var token = ""
-    @State private var certificateSHA256 = ""
+    @State private var serverURL: String
+    @State private var token: String
+    @State private var certificateSHA256: String
+    @State private var errorMessage = ""
+    @State private var discardChanges = false
+    @State private var didSyncOnSave = false
+
+    init(serverURL: String, token: String, certificateSHA256: String) {
+        _serverURL = State(initialValue: serverURL)
+        _token = State(initialValue: token)
+        _certificateSHA256 = State(initialValue: certificateSHA256)
+    }
 
     var body: some View {
         NavigationStack {
@@ -209,12 +224,27 @@ struct SettingsView: View {
                     TextField("https://192.168.1.10:8765", text: $serverURL)
                         .textInputAutocapitalization(.never)
                         .keyboardType(.URL)
+                        .autocorrectionDisabled()
                         .accessibilityLabel("电脑地址")
-                    SecureField("同步密钥", text: $token)
+                    TextField("同步密钥", text: $token)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .accessibilityLabel("同步密钥")
                     TextField("证书 SHA-256", text: $certificateSHA256, axis: .vertical)
                         .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
                         .lineLimit(2...4)
                         .accessibilityLabel("证书 SHA-256")
+                }
+                Section {
+                    Text("同步密钥保存在这台 iPhone 的钥匙串里，证书指纹也会记住。下次打开不用再贴。只有这些内容有效时才会开始同步。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    if !errorMessage.isEmpty {
+                        Text(errorMessage)
+                            .foregroundStyle(.red)
+                            .accessibilityIdentifier("pairingError")
+                    }
                 }
                 Section("设备") {
                     LabeledContent("设备编号", value: store.settings.deviceID)
@@ -222,20 +252,37 @@ struct SettingsView: View {
             }
             .navigationTitle("同步设置")
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("保存") {
-                        store.updateSettings(serverURL: serverURL, syncToken: token, certificateSHA256: certificateSHA256)
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") {
+                        discardChanges = true
                         dismiss()
                     }
-                    .disabled(!serverURL.lowercased().hasPrefix("https://") || token.isEmpty || certificateSHA256.replacingOccurrences(of: ":", with: "").count != 64)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("保存") { save() }
                 }
             }
-            .onAppear {
-                serverURL = store.settings.serverURL
-                token = store.settings.syncToken
-                certificateSHA256 = store.settings.certificateSHA256
+            .onDisappear {
+                guard !discardChanges, !didSyncOnSave else { return }
+                store.updateSettings(serverURL: serverURL, syncToken: token, certificateSHA256: certificateSHA256)
             }
+        }
+    }
+
+    private func save() {
+        store.updateSettings(serverURL: serverURL, syncToken: token, certificateSHA256: certificateSHA256)
+        serverURL = store.settings.serverURL
+        token = store.settings.syncToken
+        certificateSHA256 = store.settings.certificateSHA256
+        if store.configured {
+            didSyncOnSave = true
+            dismiss()
+        } else {
+            errorMessage = PairingInput.validationMessage(
+                serverURL: serverURL,
+                syncToken: token,
+                certificateSHA256: certificateSHA256
+            ) ?? "配对信息不完整，暂不同步"
         }
     }
 }

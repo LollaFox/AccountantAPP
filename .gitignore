@@ -33,6 +33,8 @@ receipt-sync-sha256.txt
 xcuserdata/
 DerivedData/
 ios/build/
+ios/build-device/
+ios/install-local.env
 *.xcuserstate
 *.xccheckout
 *.xcscmblueprint

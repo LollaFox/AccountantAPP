@@ -77,15 +77,16 @@ chmod +x pc/setup_macos.sh pc/start.sh pc/generate_certificate.sh start-service.
 
 ## iPhone 端
 
-必须在 Mac 上完成签名和安装：
+必须在 Mac 上用 USB 线安装。不需要付费 Apple Developer Program；用 iPhone / App Store 同一个免费 Apple ID 即可。Windows 无法签名或生成可直接安装的 `.ipa`。
 
-1. 使用 Xcode 16 或更高版本打开 `ios/ReceiptSync.xcodeproj`。
-2. 选择 `ReceiptSync` Target，在 Signing & Capabilities 中选择自己的 Apple Team。
-3. 将 Bundle Identifier 改为自己的唯一值。
-4. 连接 iPhone，选择该设备并运行。最低系统版本为 iOS 17。
-5. 在应用“同步设置”中填写电脑审核页显示的 HTTPS 地址、同步密钥和证书指纹。
+1. 用数据线连接 iPhone，解锁，并点“信任此电脑”。
+2. 第一次安装前，打开 Xcode → Settings → Accounts，点 `+`，登录上述免费 Apple ID。
+3. 在 Xcode 打开 Window → Devices and Simulators，等到列表里出现这台 iPhone。开发者模式在 Xcode 认出手机之前是隐藏的，不要在「通用」里找。
+4. 双击 `install-iphone.command`，或在终端运行 `./ios/install-iphone.sh`。若安装时才出现「开发者模式」，到设置 → 隐私与安全性最底部打开，重启后再跑一次安装器。
+5. 若 App 打不开：设置 → 通用 → VPN与设备管理，信任该 Apple ID。
+6. 在应用“同步设置”中填写电脑审核页当时显示的 HTTPS 地址、同步密钥和证书指纹。
 
-Windows 无法完成 iOS 签名或生成可直接安装的 `.ipa`。免费 Apple ID 的个人签名通常需要定期重新安装；长期自用或分发需要 Apple Developer 账号。
+安装器会把本机签名信息写到 `ios/install-local.env`（不要提交）。免费 Apple ID 的开发签名大约 7 天过期，用同一条线再跑一次安装器即可，不必为此购买开发者账号。也可以继续用 Xcode 打开 `ios/ReceiptSync.xcodeproj` 后按 Run。长期对外分发才需要付费 Apple Developer 账号；当前不做 TestFlight 或 App Store 上架。
 
 ## 大学公共 Wi-Fi
 
@@ -130,6 +131,8 @@ pc/
 ios/
   ReceiptSync.xcodeproj
   ReceiptSync/             SwiftUI iPhone 客户端
+  install-iphone.sh        USB 安装到已连接的 iPhone（免费 Apple ID）
+install-iphone.command     Finder 双击入口，调用上面的安装脚本
 ```
 
 当前版本未接入 DeepSeek，也未实现外出访问、云端中转或 VPN。OCR 结果会保留 AI 分类字段的扩展空间，但敏感小票内容不会自动发送给第三方。
