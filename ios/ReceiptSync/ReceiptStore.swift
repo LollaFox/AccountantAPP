@@ -57,6 +57,7 @@ final class ReceiptStore: ObservableObject {
         settings.syncToken = remembered.syncToken
         settings.certificateSHA256 = remembered.certificateSHA256
         settings.save()
+        LocalNetworkAccess.request()
         guard configured else {
             syncMessage = PairingInput.validationMessage(
                 serverURL: settings.serverURL,
@@ -83,7 +84,7 @@ final class ReceiptStore: ObservableObject {
             persist()
             await syncAll()
         } catch {
-            syncMessage = error.localizedDescription
+            syncMessage = NetworkSyncMessage.display(error)
         }
     }
 
@@ -96,7 +97,15 @@ final class ReceiptStore: ObservableObject {
         for id in receipts.map(\.id) {
             await syncReceipt(id: id)
         }
-        await refreshSummary()
+        let summaryFailed = await loadSummary()
+        if let receiptError = receipts.first(where: { $0.status == .error })?.errorMessage {
+            syncMessage = receiptError
+            return
+        }
+        if let summaryFailed {
+            syncMessage = summaryFailed
+            return
+        }
         syncMessage = "已同步"
         AppDelegate.scheduleBackgroundRefresh()
     }
@@ -134,17 +143,24 @@ final class ReceiptStore: ObservableObject {
         } catch {
             guard let refreshedIndex = receipts.firstIndex(where: { $0.id == id }) else { return }
             receipts[refreshedIndex].status = .error
-            receipts[refreshedIndex].errorMessage = error.localizedDescription
+            receipts[refreshedIndex].errorMessage = NetworkSyncMessage.display(error)
             persist()
         }
     }
 
     func refreshSummary() async {
-        guard configured else { return }
+        if let message = await loadSummary() {
+            syncMessage = message
+        }
+    }
+
+    private func loadSummary() async -> String? {
+        guard configured else { return nil }
         do {
             summary = try await client.summary(month: selectedMonthKey, settings: settings)
+            return nil
         } catch {
-            syncMessage = error.localizedDescription
+            return NetworkSyncMessage.display(error)
         }
     }
 

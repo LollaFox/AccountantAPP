@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import socket
 import ssl
 import subprocess
 import sys
@@ -401,6 +402,22 @@ class ConfigTests(unittest.TestCase):
             patch("receipt_sync_server.socket.socket", return_value=probe),
         ):
             self.assertEqual(local_addresses(), ["10.71.6.34"])
+
+    def test_iphone_hotspot_address_is_listed_first(self) -> None:
+        probe = MagicMock()
+        probe.__enter__.return_value = probe
+        probe.getsockname.return_value = ("10.71.6.34", 54321)
+        with (
+            patch(
+                "receipt_sync_server.socket.getaddrinfo",
+                return_value=[
+                    (socket.AF_INET, None, None, None, ("10.71.6.34", 0)),
+                    (socket.AF_INET, None, None, None, ("172.20.10.2", 0)),
+                ],
+            ),
+            patch("receipt_sync_server.socket.socket", return_value=probe),
+        ):
+            self.assertEqual(local_addresses()[0], "172.20.10.2")
 
 
 class SecurityBoundaryTests(unittest.TestCase):

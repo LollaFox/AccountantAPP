@@ -161,9 +161,9 @@
   <dialog id="pairDialog">
     <div class="dialog-head"><h2>iPhone 配对信息</h2><button class="button" data-close="pairDialog">关闭</button></div>
     <div class="dialog-body">
-      <div class="notice">服务器地址使用 HTTPS、电脑的局域网 IP 和下列端口。手机还会固定核对证书指纹，防止公共 Wi‑Fi 上的设备冒充电脑。</div>
+      <div class="notice">电脑连 iPhone 热点时，只把 172.20.10.x 那条 HTTPS 地址填进手机，不要用校园网 IP。手机还会固定核对证书指纹。</div>
       <p>电脑名称：<strong id="computerName">—</strong></p>
-      <p>服务器地址：<code id="pairAddresses">—</code></p>
+      <div>服务器地址：<div id="pairAddresses">—</div></div>
       <p>协议：<code id="pairScheme">—</code></p>
       <p>端口：<code id="pairPort">—</code></p>
       <p>同步密钥：<code id="pairToken">—</code></p>
@@ -396,7 +396,14 @@
     $('#pairButton').addEventListener('click', async () => {
       const pairing = await api('/api/v1/pairing');
       $('#computerName').textContent = pairing.computer_name;
-      $('#pairAddresses').textContent = (pairing.addresses || []).map(address => `${pairing.scheme}://${address}:${pairing.port}`).join('  ') || '未发现局域网地址';
+      const addresses = pairing.addresses || [];
+      $('#pairAddresses').innerHTML = addresses.length
+        ? addresses.map(address => {
+            const url = `${pairing.scheme}://${address}:${pairing.port}`;
+            const hotspot = address.startsWith('172.20.10.') || address.startsWith('172.20.11.');
+            return `<p><code>${escapeHtml(url)}</code>${hotspot ? ' <span class="badge">iPhone热点请填这个</span>' : ''}</p>`;
+          }).join('')
+        : '<p>未发现局域网地址</p>';
       $('#pairScheme').textContent = pairing.scheme;
       $('#pairPort').textContent = pairing.port;
       $('#pairToken').textContent = pairing.sync_token;

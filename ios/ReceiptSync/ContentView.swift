@@ -63,7 +63,7 @@ struct ContentView: View {
                 if !store.syncMessage.isEmpty {
                     Text(store.syncMessage)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(syncMessageColor)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
                         .background(.thinMaterial, in: Capsule())
@@ -84,6 +84,15 @@ struct ContentView: View {
             )
         }
         .sheet(isPresented: $showingManual) { ManualTransactionView() }
+    }
+
+    private var syncMessageColor: Color {
+        switch store.syncMessage {
+        case "已同步", "正在同步", "请先设置电脑地址":
+            return .secondary
+        default:
+            return .red
+        }
     }
 
     private var monthSelector: some View {
@@ -221,7 +230,7 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section("电脑") {
-                    TextField("https://192.168.1.10:8765", text: $serverURL)
+                    TextField("https://172.20.10.2:8765", text: $serverURL)
                         .textInputAutocapitalization(.never)
                         .keyboardType(.URL)
                         .autocorrectionDisabled()
@@ -237,7 +246,7 @@ struct SettingsView: View {
                         .accessibilityLabel("证书 SHA-256")
                 }
                 Section {
-                    Text("同步密钥保存在这台 iPhone 的钥匙串里，证书指纹也会记住。下次打开不用再贴。只有这些内容有效时才会开始同步。")
+                    Text("电脑连 iPhone 热点时，地址必须是配对页里 172.20.10.x 那一条，不要用校园网 IP。同步密钥和证书会记在这台手机上。")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     if !errorMessage.isEmpty {

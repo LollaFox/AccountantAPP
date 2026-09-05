@@ -180,7 +180,11 @@ def local_addresses() -> list[str]:
             add(probe.getsockname()[0])
     except OSError:
         pass
-    return sorted(addresses)
+    return sorted(addresses, key=lambda item: (0 if _is_iphone_hotspot_address(item) else 1, item))
+
+
+def _is_iphone_hotspot_address(address: str) -> bool:
+    return address.startswith("172.20.10.") or address.startswith("172.20.11.")
 
 
 def default_data_dir() -> Path:

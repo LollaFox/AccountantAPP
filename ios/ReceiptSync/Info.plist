@@ -32,6 +32,15 @@
     <string>在没有相机的设备或模拟器上，用于选择小票照片并同步到你的电脑。</string>
     <key>NSLocalNetworkUsageDescription</key>
     <string>用于连接同一网络中的个人小票识别电脑。</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_receiptsync._tcp</string>
+    </array>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>
     <key>UIApplicationSceneManifest</key>
     <dict>
         <key>UIApplicationSupportsMultipleScenes</key>

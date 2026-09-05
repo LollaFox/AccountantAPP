@@ -1,14 +1,36 @@
 import Foundation
 
 enum PairingInput {
-    static func normalizedURL(_ raw: String) -> String {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let first = trimmed.split(whereSeparator: { $0.isWhitespace }).first else { return "" }
-        var value = String(first)
-        if !value.contains("://") {
-            value = "https://" + value
+    static func candidateURLs(_ raw: String) -> [String] {
+        raw.split(whereSeparator: \.isWhitespace).compactMap { token in
+            var value = String(token)
+            if value.isEmpty { return nil }
+            if !value.contains("://") {
+                value = "https://" + value
+            }
+            guard let parsed = URL(string: value), parsed.scheme?.lowercased() == "https", parsed.host != nil else {
+                return nil
+            }
+            return value
         }
-        return value
+    }
+
+    static func preferredSyncURLs(_ raw: String) -> [String] {
+        candidateURLs(raw).sorted { lhs, rhs in
+            hotspotRank(lhs) < hotspotRank(rhs)
+        }
+    }
+
+    static func normalizedURL(_ raw: String) -> String {
+        preferredSyncURLs(raw).joined(separator: " ")
+    }
+
+    private static func hotspotRank(_ url: String) -> Int {
+        let host = URL(string: url)?.host ?? ""
+        if host.hasPrefix("172.20.10.") || host.hasPrefix("172.20.11.") {
+            return 0
+        }
+        return 1
     }
 
     static func normalizedToken(_ raw: String) -> String {
@@ -21,13 +43,9 @@ enum PairingInput {
     }
 
     static func isReadyToSync(serverURL: String, syncToken: String, certificateSHA256: String) -> Bool {
-        let url = normalizedURL(serverURL)
         let token = normalizedToken(syncToken)
         let fingerprint = normalizedFingerprint(certificateSHA256)
-        guard let parsed = URL(string: url), parsed.scheme?.lowercased() == "https", parsed.host != nil else {
-            return false
-        }
-        return !token.isEmpty && fingerprint.count == 64
+        return !candidateURLs(serverURL).isEmpty && !token.isEmpty && fingerprint.count == 64
     }
 
     static func rememberedDraft(
@@ -50,7 +68,7 @@ enum PairingInput {
 
     static func validationMessage(serverURL: String, syncToken: String, certificateSHA256: String) -> String? {
         guard isReadyToSync(serverURL: serverURL, syncToken: syncToken, certificateSHA256: certificateSHA256) else {
-            if !normalizedURL(serverURL).lowercased().hasPrefix("https://") {
+            if candidateURLs(serverURL).isEmpty {
                 return "电脑地址必须以 https:// 开头"
             }
             if normalizedToken(syncToken).isEmpty {

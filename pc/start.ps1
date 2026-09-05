@@ -24,6 +24,16 @@ $serverScript = "$PSScriptRoot\receipt_sync_server.py"
 
 Write-Host "Computer review: http://127.0.0.1:$ReviewPort"
 Write-Host "iPhone HTTPS port: $Port"
+Write-Host "If the iPhone is the hotspot, copy the https://172.20.10.x:$Port address from the pairing page."
+try {
+    $ruleName = "Receipt Sync iPhone 8765"
+    if (-not (Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue)) {
+        New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Action Allow -Protocol TCP -LocalPort $Port -Profile Any -ErrorAction Stop | Out-Null
+        Write-Host "Windows Firewall: inbound TCP $Port allowed."
+    }
+} catch {
+    Write-Host "Windows Firewall rule was not added. If the iPhone cannot connect, allow inbound TCP $Port on the Public profile."
+}
 & $Python $serverScript --data-dir $DataDir --model-cache $ModelCache `
     --host 0.0.0.0 --port $Port --cert $certificatePath --key $keyPath `
     --review-port $ReviewPort

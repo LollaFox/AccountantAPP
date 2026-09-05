@@ -85,4 +85,22 @@ final class HongKongDateTests: XCTestCase {
         XCTAssertEqual(replaced.syncToken, "new-token")
         XCTAssertEqual(replaced.certificateSHA256, String(repeating: "C", count: 64))
     }
+
+    func testFailedComputerConnectionDoesNotReadAsSynced() {
+        XCTAssertEqual(
+            NetworkSyncMessage.display(URLError(.cannotConnectToHost)),
+            SyncClient.SyncError.unreachable.errorDescription
+        )
+        XCTAssertEqual(
+            NetworkSyncMessage.display(URLError(.cancelled)),
+            SyncClient.SyncError.certificateRejected.errorDescription
+        )
+        XCTAssertNotEqual(NetworkSyncMessage.display(URLError(.cannotConnectToHost)), "已同步")
+    }
+
+    func testHotspotAddressIsTriedBeforeCampusAddress() {
+        let urls = PairingInput.preferredSyncURLs("https://10.71.6.34:8765 https://172.20.10.2:8765")
+        XCTAssertEqual(urls.first, "https://172.20.10.2:8765")
+        XCTAssertEqual(urls.last, "https://10.71.6.34:8765")
+    }
 }
