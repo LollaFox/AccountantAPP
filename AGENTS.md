@@ -9,7 +9,7 @@
 - 当前 Mac 工作副本的源码根目录就是本文件所在目录。这是 Git 仓库。
 - Windows 上的原始工作目录曾是 `work/receipt-sync-app/`；`outputs/receipt-sync-app/` 是较早的导出副本，不是继续开发的事实来源，不要在其中修改代码。
 - Windows 上已有用户测试数据位于 `work/pc-local-test/`。未经用户明确同意，不要删除、清空、迁移或覆盖这些记录，也不要把它们拷到 Mac。
-- 正式运行数据默认位于 `%LOCALAPPDATA%\ReceiptSync`（Windows）或 `~/Library/Application Support/ReceiptSync`（macOS），也不得在测试时随意改动。
+- 正式运行数据默认位于 `%LOCALAPPDATA%\ReceiptSync`（Windows）或 `~/Library/Application Support/ReceiptSync`（macOS），也不得在测试时随意改动。Windows 手机端镜像使用独立的 `%LOCALAPPDATA%\ReceiptSyncPhone`，不要和电脑账本混用。
 - 测试用的数据库、证书、图片和模型目录属于运行产物，不应复制到 Mac 工程、提交或分发。
 - 配对令牌、TLS 私钥和当前证书指纹属于敏感信息，不要写入源码、文档、日志样例或聊天回复。
 - macOS OCR 虚拟环境是 `pc/.venv`（gitignored）。不要提交该目录，也不要提交 `*.pem`、`config.json` 或指纹文件。
@@ -75,6 +75,14 @@
 - 月份选择、汇总查询 `YYYY-MM`、手工流水 `occurred_at` 和小票 `captured_at` 均按 `Asia/Hong_Kong` 编码，ISO 时间必须带 `+08:00` 时区，电脑才会入账到正确月份。
 - 无相机时（模拟器）回退到照片图库；`Info.plist` 含 `NSPhotoLibraryUsageDescription`。只有相机可用时才设置 `cameraCaptureMode`。
 
+### Windows 手机端镜像
+
+- 这不是第二套 OCR/审核服务。它只镜像 iPhone 客户端：粘贴 `receiptsync://pair?data=…` 邀请、兑换独立设备密钥、证书固定、月度汇总、小票排队和手工记账。
+- 协议与 iOS 相同：版本 2、`GET /api/v1/connection`、`POST /api/v1/pairing/redeem`（无 Origin）、稳定 `request_id`、小票 404/410 清队列。只在不可达/超时时尝试下一个局域网地址，证书或身份错误不得换地址绕过。
+- 无效手工记录可修改后用同一请求 ID 重试；冲突记录必须先在电脑核对，只能从本机队列移除。被拒绝条目不阻塞其他记录和汇总。
+- 数据目录是 `%LOCALAPPDATA%\ReceiptSyncPhone`，不得写入电脑账本 `%LOCALAPPDATA%\ReceiptSync`。设备密钥放在 Windows Credential Manager，不写进 `settings.json`。
+- 启动入口是根目录 `start-phone.cmd`（`windows/phone_app.py`）。电脑服务仍用 `start-service.cmd`。
+
 ## 4. 技术栈和关键文件
 
 ### 电脑端
@@ -131,6 +139,10 @@
 - `ios/ReceiptSync.xcodeproj/xcshareddata/xcschemes/ReceiptSync.xcscheme`：共享 scheme，含 unit/UI test。
 - `ios/install-iphone.sh` / `install-iphone.command`：免费 Apple ID 的 USB 真机安装。
 - `pc/test_iphone_installer.py`：安装脚本语法、免费账号说明、设备/团队解析和本地 env 安全写入。
+- `windows/phone_sync.py`：Windows 对 iPhone 同步协议 v2 的镜像（邀请兑换、证书固定、离线队列）。
+- `windows/phone_app.py`：tkinter 界面；粘贴一次性邀请、待发送收支、只读权限、忘记电脑。
+- `start-phone.cmd`：Windows 手机端镜像启动入口。不要用它启动 OCR/审核服务。
+- `pc/test_windows_phone.py`：邀请解析、兑换前落盘、活证书固定、410 清队列、viewer 只读、手工去重。
 
 ## 5. 解析和账务规则，不得回退
 
@@ -413,6 +425,7 @@ Passkey 当前限定于稳定 `localhost` 来源的本机管理，不需要 iPho
 - `PairingScanner.swift` 用 VisionKit 扫 QR；扫描只填入邀请，必须由用户确认才连接。无扫码能力时可粘贴邀请，手动地址/密钥/指纹方式仍保留。不自动处理外部 deep link、不扫描局域网、不引入 Bonjour/VPN/云中转。
 - `SyncClient` 使用复用的 ephemeral URLSession、严格叶证书 SHA-256、禁止重定向、协议版本 2 与服务器 UUID 握手。仅传输不可达错误可尝试下一个候选地址，证书/身份错误不得回退绕过。
 - `ReceiptStore` 将连接地址、密钥、证书、服务器身份作为一个 Keychain 配对记录保存；握手或保存失败保留原设置。旧队列保留原服务器绑定，换服务器不能静默搬迁账目。
+- Windows 手机端镜像（`windows/phone_sync.py`）遵循同一套协议 v2：先把 claim 与设备密钥写入 Credential Manager，再 HTTPS 兑换；不发送 Origin；不把长期密钥写入 `settings.json`。活证书固定、邀请兑换、viewer 只读和删除墓碑已用临时 HTTPS 服务回归，不能替代 iOS 真机验收。
 
 ### 持久队列与故障恢复
 
@@ -425,7 +438,7 @@ Passkey 当前限定于稳定 `localhost` 来源的本机管理，不需要 iPho
 
 ### 验证与交接
 
-- 新增 `pc/test_multi_device.py`、`pc/test_passkeys.py`、`pc/test_pairing.py`、`pc/test_resilience.py`、`ios/ReceiptSyncTests/ConnectionTests.swift`。覆盖权限、真实软件签名、恢复会话隔离、并发抢邀、过期、断线重试、慢 TLS、部分上传、强杀临时 OCR 子进程及磁盘失败。
+- 新增 `pc/test_multi_device.py`、`pc/test_passkeys.py`、`pc/test_pairing.py`、`pc/test_resilience.py`、`ios/ReceiptSyncTests/ConnectionTests.swift`、`pc/test_windows_phone.py`。覆盖权限、真实软件签名、恢复会话隔离、并发抢邀、过期、断线重试、慢 TLS、部分上传、强杀临时 OCR 子进程、磁盘失败，以及 Windows 手机端镜像对活 HTTPS 服务的配对/记账。
 - `pc/verify_web_security.py` + `pc/test_web_security.cjs` 使用全新无头浏览器和虚拟验证器；不能使用个人浏览器配置或真实 Touch ID 来自动登记。
 - `ios/test_mac_connection.py` 建立临时 Mac HTTPS 服务，通过 `TEST_RUNNER_RECEIPT_SYNC_TEST_FIXTURE` 传递私有临时路径。测试真实 URLSession、证书拒绝、多设备账本、重复写入和实际 QR 图片解码/兑换。服务端验证账目/作业/设备数，防止 XCTest 默默 skip 被当作通过。
 - 模拟器上 Vision 硬件推理不可用，静态 QR 图片测试使用 Apple Core Image 软件解码；这不替代真机 VisionKit 相机扫码验收。

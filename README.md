@@ -109,6 +109,17 @@ pc/.venv/bin/python -m pip install -r pc/requirements-server.txt
 
 安装器会把本机签名信息写到 `ios/install-local.env`（不要提交）。免费 Apple ID 的开发签名大约 7 天过期，用同一条线再跑一次安装器即可，不必为此购买开发者账号。也可以继续用 Xcode 打开 `ios/ReceiptSync.xcodeproj` 后按 Run。长期对外分发才需要付费 Apple Developer 账号；当前不做 TestFlight 或 App Store 上架。
 
+## Windows 手机端镜像
+
+这是 iPhone 客户端在 Windows 上的对照程序，用来连同一台电脑上的审核/OCR 服务。它不是第二套账本，也不要在这里跑 PaddleOCR。
+
+1. 电脑上先用 Passkey 打开 `http://localhost:8764`，为这台 Windows 设备生成一次性邀请。
+2. 双击 `start-phone.cmd`，或运行 `py -3 windows\phone_app.py`。
+3. 在「同步设置」中粘贴完整的 `receiptsync://pair?data=…` 邀请，确认它来自你自己的电脑后再连接。
+4. 设备密钥保存在 Windows Credential Manager；本机数据在 `%LOCALAPPDATA%\ReceiptSyncPhone`，与电脑账本 `%LOCALAPPDATA%\ReceiptSync` 分开。
+
+只读设备只能看汇总。电脑删除小票后，下次同步若收到 404 或 410，本机队列会清掉对应项。被电脑拒绝的手工记录可在本机修改后用同一编号重试；冲突记录请先在电脑核对，再决定是否只从本机队列移除。校园网客户端隔离时，把电脑连到手机热点，并使用邀请里当时的地址，不要全网扫描。
+
 ## 大学公共 Wi-Fi
 
 公共 Wi-Fi 上只有 HTTPS 同步端口对局域网开放；电脑审核页只绑定 `127.0.0.1`，其他设备无法访问。
@@ -158,6 +169,10 @@ ios/
   ReceiptSync/             SwiftUI iPhone 客户端
   install-iphone.sh        USB 安装到已连接的 iPhone（免费 Apple ID）
 install-iphone.command     Finder 双击入口，调用上面的安装脚本
+windows/
+  phone_sync.py            Windows 对 iPhone 同步协议的镜像
+  phone_app.py             tkinter 界面
+start-phone.cmd            Windows 手机端镜像启动入口
 ```
 
 当前版本未接入 DeepSeek，也未实现外出访问、云端中转或 VPN。OCR 结果会保留 AI 分类字段的扩展空间，但敏感小票内容不会自动发送给第三方。
