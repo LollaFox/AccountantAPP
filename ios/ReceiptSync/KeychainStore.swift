@@ -4,14 +4,20 @@ import Security
 enum KeychainStore {
     private static let service = "ReceiptSync"
 
-    static func write(_ value: String, account: String) {
+    enum StorageError: LocalizedError {
+        case unavailable
+        var errorDescription: String? { "无法安全保存配对信息。请解锁设备后重试。" }
+    }
+
+    static func write(_ value: String, account: String) throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account
         ]
         guard !value.isEmpty else {
-            SecItemDelete(query as CFDictionary)
+            let status = SecItemDelete(query as CFDictionary)
+            guard status == errSecSuccess || status == errSecItemNotFound else { throw StorageError.unavailable }
             return
         }
         let attributes: [String: Any] = [
@@ -19,10 +25,11 @@ enum KeychainStore {
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         ]
         let updated = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
-        guard updated == errSecItemNotFound else { return }
+        if updated == errSecSuccess { return }
+        guard updated == errSecItemNotFound else { throw StorageError.unavailable }
         var item = query
         item.merge(attributes) { _, new in new }
-        SecItemAdd(item as CFDictionary, nil)
+        guard SecItemAdd(item as CFDictionary, nil) == errSecSuccess else { throw StorageError.unavailable }
     }
 
     static func read(account: String) -> String? {

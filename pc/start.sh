@@ -11,6 +11,12 @@ model_cache="${RECEIPT_SYNC_MODEL_CACHE:-$(receipt_sync_default_model_cache)}"
 port="${RECEIPT_SYNC_PORT:-8765}"
 review_port="${RECEIPT_SYNC_REVIEW_PORT:-8764}"
 
+if ! "$python_bin" -c 'import webauthn, segno' >/dev/null 2>&1; then
+  echo "Passkey support is required. Install it with:" >&2
+  echo "  $python_bin -m pip install -r $script_dir/requirements-server.txt" >&2
+  exit 1
+fi
+
 certificate_directory="$data_dir/tls"
 certificate_path="$certificate_directory/receipt-sync-cert.pem"
 key_path="$certificate_directory/receipt-sync-key.pem"
@@ -21,7 +27,7 @@ fi
 
 export PYTHONUNBUFFERED=1
 
-echo "Computer review: http://127.0.0.1:$review_port"
+echo "Computer review: http://localhost:$review_port"
 echo "iPhone HTTPS port: $port"
 exec "$python_bin" "$script_dir/receipt_sync_server.py" \
   --data-dir "$data_dir" \

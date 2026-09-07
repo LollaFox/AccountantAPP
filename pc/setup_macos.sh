@@ -35,6 +35,7 @@ echo "Creating virtual environment with: $base_python"
 # shellcheck disable=SC1091
 source "$venv_dir/bin/activate"
 python -m pip install --upgrade pip
+python -m pip install -r "$script_dir/requirements-server.txt"
 echo "Installing PaddlePaddle CPU (macOS)..."
 python -m pip install "paddlepaddle==3.2.1" -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
 echo "Installing PaddleOCR 3.7.0..."

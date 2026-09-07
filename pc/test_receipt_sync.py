@@ -445,12 +445,16 @@ class SecurityBoundaryTests(unittest.TestCase):
     def test_phone_token_has_only_required_endpoints(self) -> None:
         receipt_id = "2bfc30f1-f7cb-40a3-80db-9417f11b4072"
         allowed = [
+            ("GET", "/api/v1/connection", {}),
             ("GET", "/api/v1/summary", {}),
             ("GET", f"/api/v1/receipts/{receipt_id}", {}),
             ("POST", "/api/v1/receipts", {}),
             ("POST", "/api/v1/transactions", {}),
         ]
         denied = [
+            ("GET", "/api/v1/devices", {}),
+            ("POST", "/api/v1/devices", {}),
+            ("DELETE", "/api/v1/devices/legacy", {}),
             ("GET", "/api/v1/pairing", {}),
             ("GET", "/api/v1/receipts", {}),
             ("GET", "/api/v1/transactions", {}),
@@ -473,7 +477,7 @@ class MacOSCertificateTests(unittest.TestCase):
         script = Path(__file__).resolve().parent / "generate_certificate.sh"
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp)
-            subprocess.run(["bash", str(script), str(output)], check=True, cwd=output)
+            subprocess.run(["bash", str(script), str(output)], check=True, cwd=output, capture_output=True)
             cert_path = output / "receipt-sync-cert.pem"
             key_path = output / "receipt-sync-key.pem"
             fingerprint_path = output / "receipt-sync-sha256.txt"

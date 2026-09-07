@@ -10,11 +10,14 @@ struct ReceiptSyncApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(store)
-                .task { await store.syncAll() }
-        }
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active { Task { await store.syncAll() } }
+                .task(id: scenePhase) {
+                    guard scenePhase == .active else { return }
+                    repeat {
+                        await store.syncAll()
+                        do { try await Task.sleep(for: .seconds(30)) }
+                        catch { return }
+                    } while !Task.isCancelled
+                }
         }
     }
 }
-

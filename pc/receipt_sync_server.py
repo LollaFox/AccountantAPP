@@ -28,6 +28,8 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from receipt_parser import OCRLine, UNKNOWN_MERCHANT, coerce_lines, parse_receipt
+from receipt_passkeys import AdminPasskeys, PasskeyError, AVAILABLE as PASSKEYS_AVAILABLE
+from receipt_pairing import DevicePairing, PairingError
 
 
 HONG_KONG_TIMEZONE = timezone(timedelta(hours=8))
@@ -35,6 +37,10 @@ LEGACY_UNKNOWN_MERCHANTS = ("小票商户（待确认）", "小票商戶（待�
 MAX_AMOUNT_CENTS = 1_000_000_000_000
 MAX_LINE_ITEMS = 500
 UUID_PATTERN = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")
+
+
+class RequestConflict(ValueError):
+    pass
 
 
 def utc_now() -> str:
@@ -258,6 +264,8 @@ class Database:
     def __init__(self, path: Path, export_dir: Path):
         self.path = path
         self.export_dir = export_dir
+        self.export_lock = threading.Lock()
+        self.receipt_lock = threading.RLock()
         self.export_dir.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
@@ -326,12 +334,92 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_transactions_month
                     ON transactions(occurred_at, confirmed, kind, category);
                 CREATE INDEX IF NOT EXISTS idx_receipts_status ON receipts(status, created_at);
+                CREATE TABLE IF NOT EXISTS server_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS devices (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    token_hash TEXT NOT NULL UNIQUE,
+                    role TEXT NOT NULL CHECK(role IN ('contributor', 'viewer')),
+                    created_at TEXT NOT NULL,
+                    last_seen_at TEXT,
+                    revoked_at TEXT
+                );
+                CREATE TABLE IF NOT EXISTS request_log (
+                    id TEXT PRIMARY KEY,
+                    payload_hash TEXT NOT NULL,
+                    response_json TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS deleted_receipts (id TEXT PRIMARY KEY);
                 """
             )
+            db.execute("INSERT OR IGNORE INTO server_metadata VALUES ('server_id', ?)", (str(uuid.uuid4()),))
             db.execute(
                 "UPDATE transactions SET merchant=? WHERE merchant IN (?, ?)",
                 (UNKNOWN_MERCHANT, *LEGACY_UNKNOWN_MERCHANTS),
             )
+
+    @property
+    def server_id(self) -> str:
+        with self.session() as db:
+            return db.execute("SELECT value FROM server_metadata WHERE key='server_id'").fetchone()[0]
+
+    def import_legacy_device(self, token: str) -> None:
+        # A single migration marker prevents a revoked legacy credential from reviving on restart.
+        with self.session() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if db.execute("SELECT 1 FROM server_metadata WHERE key='devices_migrated'").fetchone():
+                return
+            if token:
+                db.execute(
+                    "INSERT INTO devices (id,name,token_hash,role,created_at) VALUES (?,?,?,?,?)",
+                    ("legacy", "旧版共享连接（请逐台重新配对后撤销）", self.token_hash(token), "contributor", utc_now()),
+                )
+            db.execute("INSERT INTO server_metadata VALUES ('devices_migrated','1')")
+
+    @staticmethod
+    def token_hash(token: str) -> str:
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    def create_device(self, name: str, role: str = "contributor") -> dict[str, Any]:
+        name = _bounded_text(name, "name", 100, allow_empty=False)
+        if role not in ("contributor", "viewer"):
+            raise ValueError("role must be contributor or viewer")
+        token = secrets.token_urlsafe(32)
+        device = {"id": str(uuid.uuid4()), "name": name, "role": role, "created_at": utc_now()}
+        with self.session() as db:
+            db.execute(
+                "INSERT INTO devices (id,name,token_hash,role,created_at) VALUES (?,?,?,?,?)",
+                (device["id"], name, self.token_hash(token), role, device["created_at"]),
+            )
+        return {**device, "sync_token": token}
+
+    def list_devices(self) -> list[dict[str, Any]]:
+        with self.session() as db:
+            return [dict(row) for row in db.execute(
+                "SELECT id,name,role,created_at,last_seen_at,revoked_at FROM devices ORDER BY created_at"
+            )]
+
+    def revoke_device(self, device_id: str) -> bool:
+        with self.session() as db:
+            return db.execute(
+                "UPDATE devices SET revoked_at=COALESCE(revoked_at,?) WHERE id=?", (utc_now(), device_id)
+            ).rowcount > 0
+
+    def authenticate_device(self, token: str) -> dict[str, Any] | None:
+        if not token or len(token) > 512:
+            return None
+        with self.session() as db:
+            row = db.execute(
+                "SELECT id,name,role FROM devices WHERE token_hash=? AND revoked_at IS NULL",
+                (self.token_hash(token),),
+            ).fetchone()
+            if row:
+                db.execute("UPDATE devices SET last_seen_at=? WHERE id=?", (utc_now(), row["id"]))
+            return dict(row) if row else None
+
+    def receipt_deleted(self, receipt_id: str) -> bool:
+        with self.session() as db:
+            return db.execute("SELECT 1 FROM deleted_receipts WHERE id=?", (receipt_id,)).fetchone() is not None
 
     def create_receipt(self, receipt_id: str, device_id: str, captured_at: str, image_path: str) -> bool:
         now = utc_now()
@@ -460,23 +548,29 @@ class Database:
         return self.get_receipt(receipt_id) or {}
 
     def add_transaction(self, body: dict[str, Any]) -> dict[str, Any]:
-        transaction_id = str(body.get("id") or f"manual-{uuid.uuid4()}")
+        request_id = canonical_receipt_id(body["request_id"]) if "request_id" in body else None
+        transaction_id = f"manual-{request_id}" if request_id else str(body.get("id") or f"manual-{uuid.uuid4()}")
         now = utc_now()
         transaction = validate_transaction(body)
+        payload_hash = hashlib.sha256(json.dumps(transaction, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
         with self.session() as db:
-            existing = db.execute("SELECT receipt_id FROM transactions WHERE id=?", (transaction_id,)).fetchone()
+            db.execute("BEGIN IMMEDIATE")
+            if request_id:
+                replay = db.execute("SELECT * FROM request_log WHERE id=?", (transaction_id,)).fetchone()
+                if replay:
+                    if replay["payload_hash"] != payload_hash:
+                        raise RequestConflict("request ID was already used with different data")
+                    return json.loads(replay["response_json"])
+            existing = db.execute("SELECT * FROM transactions WHERE id=?", (transaction_id,)).fetchone()
             if existing and existing["receipt_id"] is not None:
                 raise ValueError("manual transaction id conflicts with a receipt transaction")
+            if existing:
+                raise RequestConflict("transaction ID already exists")
             db.execute(
                 """INSERT INTO transactions
                 (id, receipt_id, occurred_at, kind, category, scene, merchant, content, amount_cents,
                  currency, payment_account, necessary, notes, confirmed, created_at, updated_at)
-                VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET occurred_at=excluded.occurred_at, kind=excluded.kind,
-                category=excluded.category, scene=excluded.scene, merchant=excluded.merchant,
-                content=excluded.content, amount_cents=excluded.amount_cents, currency=excluded.currency,
-                payment_account=excluded.payment_account, necessary=excluded.necessary,
-                notes=excluded.notes, confirmed=1, updated_at=excluded.updated_at""",
+                VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)""",
                 (
                     transaction_id, transaction["occurred_at"], transaction["kind"], transaction["category"],
                     transaction["scene"], transaction["merchant"], transaction["content"],
@@ -485,6 +579,11 @@ class Database:
                 ),
             )
             row = db.execute("SELECT * FROM transactions WHERE id=?", (transaction_id,)).fetchone()
+            if request_id:
+                # Keep acknowledgement after deletion so a delayed retry cannot recreate an entry.
+                db.execute("INSERT INTO request_log VALUES (?,?,?)", (
+                    transaction_id, payload_hash, json.dumps({"id": transaction_id}),
+                ))
         self.export_csv()
         return dict(row)
 
@@ -516,7 +615,7 @@ class Database:
         return True
 
     def delete_receipt(self, receipt_id: str) -> bool:
-        with self.session() as db:
+        with self.receipt_lock, self.session() as db:
             receipt = db.execute(
                 "SELECT image_path FROM receipts WHERE id=?", (receipt_id,)
             ).fetchone()
@@ -528,6 +627,7 @@ class Database:
                 raise ValueError("receipt image path is outside the managed image directory")
             db.execute("DELETE FROM transactions WHERE receipt_id=?", (receipt_id,))
             db.execute("DELETE FROM receipts WHERE id=?", (receipt_id,))
+            db.execute("INSERT OR IGNORE INTO deleted_receipts VALUES (?)", (receipt_id,))
             image_path.unlink(missing_ok=True)
         self.export_csv()
         return True
@@ -535,6 +635,7 @@ class Database:
     def summary(self, month: str) -> dict[str, Any]:
         start_utc, end_utc = month_bounds_utc(month)
         with self.session() as db:
+            db.execute("BEGIN")
             totals = db.execute(
                 """SELECT kind, COALESCE(SUM(amount_cents), 0) AS amount_cents
                 FROM transactions WHERE confirmed=1
@@ -571,7 +672,14 @@ class Database:
         }
 
     def export_csv(self) -> None:
+        # Multiple device writes may finish together. Serialize snapshot + replacement so
+        # an older export cannot finish after a newer one and overwrite its data.
+        with self.export_lock:
+            self._export_csv()
+
+    def _export_csv(self) -> None:
         with self.session() as db:
+            db.execute("BEGIN")
             transactions = db.execute(
                 "SELECT * FROM transactions WHERE confirmed=1 ORDER BY occurred_at, created_at"
             ).fetchall()
@@ -640,40 +748,75 @@ class PaddleEngine:
 
 
 class ReceiptWorker:
-    def __init__(self, database: Database, images_dir: Path, model_cache: Path):
+    def __init__(self, database: Database, images_dir: Path, model_cache: Path, *, engine=None):
         self.database = database
         self.images_dir = images_dir
-        self.engine = PaddleEngine(model_cache)
+        self.engine = engine or PaddleEngine(model_cache)
         self.jobs: queue.Queue[str] = queue.Queue()
+        self.pending = set()
+        self.pending_lock = threading.Lock()
+        self.stopping = threading.Event()
+        # Receipt state is durable; the in-memory queue is only a delivery mechanism.
+        with self.database.session() as db:
+            recovering = db.execute("SELECT id FROM receipts WHERE status IN ('queued','processing') ORDER BY created_at").fetchall()
+        for row in recovering:
+            self.submit(row["id"])
         self.thread = threading.Thread(target=self._run, name="receipt-ocr", daemon=True)
         self.thread.start()
 
     def submit(self, receipt_id: str) -> None:
-        self.jobs.put(receipt_id)
+        with self.pending_lock:
+            if receipt_id not in self.pending and not self.stopping.is_set():
+                self.pending.add(receipt_id)
+                self.jobs.put(receipt_id)
+
+    def stop(self) -> None:
+        self.stopping.set()
+        self.thread.join(timeout=2)
 
     def _run(self) -> None:
-        while True:
-            receipt_id = self.jobs.get()
+        while not self.stopping.is_set():
+            try:
+                receipt_id = self.jobs.get(timeout=0.2)
+            except queue.Empty:
+                continue
             try:
                 receipt = self.database.get_receipt(receipt_id)
-                if not receipt:
+                if not receipt or receipt["status"] not in ("queued", "processing"):
                     continue
+                image_path = Path(receipt["image_path"]).resolve()
+                if image_path.parent != self.images_dir.resolve():
+                    raise ValueError("receipt image is outside the managed directory")
                 self.database.set_receipt_status(receipt_id, "processing")
-                lines, ocr_payload = self.engine.recognize(Path(receipt["image_path"]))
+                lines, ocr_payload = self.engine.recognize(image_path)
                 parsed = parse_receipt(lines, captured_at=receipt["captured_at"])
                 self.database.finish_ocr(receipt_id, ocr_payload, parsed)
             except Exception as error:
-                self.database.set_receipt_status(
-                    receipt_id,
-                    "error",
-                    error=f"{type(error).__name__}: {error}",
-                )
-                traceback.print_exc()
+                try:
+                    self.database.set_receipt_status(
+                        receipt_id,
+                        "error",
+                        error=f"{type(error).__name__}: {error}",
+                    )
+                except (sqlite3.Error, OSError):
+                    # Disk/SQLite failure must not kill the shared worker. The last
+                    # durable queued/processing status is recovered on the next start.
+                    print("OCR status could not be saved; pending work will recover after restart.", flush=True)
+                else:
+                    traceback.print_exc()
             finally:
+                with self.pending_lock:
+                    self.pending.discard(receipt_id)
                 self.jobs.task_done()
 
 
 class ReceiptHTTPServer(ThreadingHTTPServer):
+    max_connections = 32
+    handshake_timeout = 5
+    header_timeout = 10
+    body_timeout = 30
+    request_deadline = 60
+
     def __init__(
         self,
         address: tuple[str, int],
@@ -688,6 +831,10 @@ class ReceiptHTTPServer(ThreadingHTTPServer):
         self.images_dir = config.data_dir / "images"
         self.images_dir.mkdir(parents=True, exist_ok=True)
         self.database = database or Database(config.data_dir / "receipts.sqlite3", config.data_dir / "exports")
+        self.database.import_legacy_device(config.sync_token)
+        self.allow_admin = config.host in ("127.0.0.1", "localhost", "::1")
+        self.passkeys = AdminPasskeys(self.database)
+        self.pairing = DevicePairing(self.database)
         self.worker = worker or ReceiptWorker(self.database, self.images_dir, config.model_cache)
         self.scheme = "http"
         self.pairing_scheme = "http"
@@ -695,6 +842,39 @@ class ReceiptHTTPServer(ThreadingHTTPServer):
         self.certificate_sha256 = ""
         self.auth_failures: dict[str, list[float]] = {}
         self.auth_lock = threading.Lock()
+        self.tls_context = None
+        self.connection_slots = threading.BoundedSemaphore(self.max_connections)
+
+    def configure_tls(self, context: ssl.SSLContext) -> None:
+        # Keep accept() plaintext and fast. TLS negotiation belongs to a bounded worker.
+        self.tls_context = context
+
+    def process_request(self, request, client_address):
+        if not self.connection_slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self.connection_slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            request.settimeout(self.handshake_timeout)
+            if self.tls_context:
+                request = self.tls_context.wrap_socket(request, server_side=True, do_handshake_on_connect=False)
+                request.do_handshake()
+            request.settimeout(self.header_timeout)
+            self.finish_request(request, client_address)
+        except (OSError, ConnectionError):
+            # Includes TLS errors/timeouts and peers disconnecting during a response.
+            pass
+        except Exception:
+            self.handle_error(request, client_address)
+        finally:
+            self.shutdown_request(request)
+            self.connection_slots.release()
 
     def auth_rate_limited(self, address: str) -> bool:
         now = time.monotonic()
@@ -711,6 +891,35 @@ class ReceiptHTTPServer(ThreadingHTTPServer):
 class Handler(BaseHTTPRequestHandler):
     server: ReceiptHTTPServer
     protocol_version = "HTTP/1.1"
+
+    def handle_one_request(self):
+        def expire():
+            try:
+                self.connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+        # An absolute deadline also stops slow byte-by-byte header/body delivery.
+        deadline = threading.Timer(self.server.request_deadline, expire)
+        deadline.daemon = True
+        self.connection.settimeout(self.server.header_timeout)
+        deadline.start()
+        try:
+            super().handle_one_request()
+        finally:
+            deadline.cancel()
+
+    def _is_local_admin(self) -> bool:
+        return (self.server.allow_admin and self._is_loopback() and self._valid_loopback_host()
+                and "X-Sync-Token" not in self.headers)
+
+    @property
+    def _admin_origin(self) -> str:
+        return f"http://localhost:{self.server.server_port}"
+
+    def _passkey_origin_valid(self) -> bool:
+        return (self._is_local_admin()
+                and self.headers.get("Host", "").lower() == f"localhost:{self.server.server_port}"
+                and self.headers.get("Origin") == self._admin_origin)
 
     def log_message(self, format: str, *args: Any) -> None:
         print(f"{self.address_string()} - {format % args}")
@@ -750,7 +959,10 @@ class Handler(BaseHTTPRequestHandler):
             return False
 
     def _valid_loopback_host(self) -> bool:
-        host = urlparse(f"//{self.headers.get('Host', '')}").hostname
+        try:
+            host = urlparse(f"//{self.headers.get('Host', '')}").hostname
+        except ValueError:
+            return False
         if not host:
             return False
         if host.lower() == "localhost":
@@ -763,33 +975,50 @@ class Handler(BaseHTTPRequestHandler):
     @staticmethod
     def remote_endpoint_allowed(method: str, path: str, query: dict[str, list[str]]) -> bool:
         if method == "GET":
-            if path == "/api/v1/summary":
+            if path in ("/api/v1/summary", "/api/v1/connection"):
                 return True
             receipt_match = re.fullmatch(rf"/api/v1/receipts/({UUID_PATTERN.pattern})", path.lower())
-            if receipt_match and query.get("raw", ["0"])[0] != "1":
+            if receipt_match and "1" not in query.get("raw", []):
                 return True
             return False
         return method == "POST" and path in ("/api/v1/receipts", "/api/v1/transactions")
 
     def _require_auth(self, path: str, query: dict[str, list[str]] | None = None) -> bool:
-        if self._is_loopback():
-            if self._valid_loopback_host():
+        self.device = None
+        # Handshake always authenticates the submitted device token, including on loopback.
+        if path != "/api/v1/connection" and self._is_local_admin():
+            origin = self.headers.get("Origin")
+            if origin and origin != self._admin_origin:
+                self._json(HTTPStatus.FORBIDDEN, {"error": "invalid admin origin"})
+                return False
+            if self.server.passkeys.authenticated(self.headers.get("X-Admin-Session", "")):
                 return True
-            self._json(HTTPStatus.FORBIDDEN, {"error": "invalid local host"})
+            self._json(HTTPStatus.UNAUTHORIZED, {"error": "请使用 Passkey 解锁电脑管理页。", "code": "passkey_required"})
             return False
         if self.server.auth_rate_limited(self.client_address[0]):
             self._json(HTTPStatus.TOO_MANY_REQUESTS, {"error": "too many failed authentication attempts"})
             return False
-        if not secrets.compare_digest(self.headers.get("X-Sync-Token", ""), self.server.config.sync_token):
+        self.device = self.server.database.authenticate_device(self.headers.get("X-Sync-Token", ""))
+        if not self.device:
             self.server.record_auth_failure(self.client_address[0])
             self._json(HTTPStatus.UNAUTHORIZED, {"error": "invalid sync token"})
             return False
         if not self.remote_endpoint_allowed(self.command, path, query or {}):
             self._json(HTTPStatus.FORBIDDEN, {"error": "this endpoint is only available on the computer"})
             return False
+        if self.device["role"] == "viewer" and path not in ("/api/v1/connection", "/api/v1/summary"):
+            self._json(HTTPStatus.FORBIDDEN, {"error": "this device can only read summaries"})
+            return False
+        expected_server = self.headers.get("X-Server-ID")
+        if expected_server and expected_server != self.server.database.server_id:
+            self._json(HTTPStatus.CONFLICT, {"error": "server identity changed", "code": "server_changed"})
+            return False
         return True
 
     def _read_json(self, max_bytes: int = 16 * 1024 * 1024) -> dict[str, Any]:
+        if self.headers.get("Transfer-Encoding") or len(self.headers.get_all("Content-Length", [])) != 1:
+            self.close_connection = True
+            raise ValueError("one Content-Length and no Transfer-Encoding are required")
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError as error:
@@ -799,7 +1028,15 @@ class Handler(BaseHTTPRequestHandler):
             if length > max_bytes:
                 self.close_connection = True
             raise ValueError("invalid request size")
-        raw_body = self.rfile.read(length)
+        self.connection.settimeout(self.server.body_timeout)
+        try:
+            raw_body = self.rfile.read(length)
+        except OSError:
+            self.close_connection = True
+            raise ValueError("request body timed out") from None
+        if len(raw_body) != length:
+            self.close_connection = True
+            raise ValueError("incomplete request body")
         if self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
             raise ValueError("Content-Type must be application/json")
         body = json.loads(raw_body.decode("utf-8"))
@@ -812,10 +1049,26 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed_url.path
         query = parse_qs(parsed_url.query)
         if path == "/":
-            if not self._is_loopback() or not self._valid_loopback_host():
+            if not self._is_local_admin():
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
                 return
+            if self.headers.get("Host", "").lower() != f"localhost:{self.server.server_port}":
+                self.send_response(HTTPStatus.TEMPORARY_REDIRECT)
+                self.send_header("Location", self._admin_origin + "/")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             self._html(Path(__file__).parent / "web" / "index.html")
+            return
+        if path == "/api/v1/auth/status":
+            if not self._is_local_admin():
+                self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                return
+            self._json(HTTPStatus.OK, {
+                "available": PASSKEYS_AVAILABLE, "registered": self.server.passkeys.count > 0,
+                "passkey_count": self.server.passkeys.count,
+                "authenticated": self.server.passkeys.authenticated(self.headers.get("X-Admin-Session", "")),
+            })
             return
         if path == "/api/v1/health":
             self._json(HTTPStatus.OK, {"status": "ok", "service": "receipt-sync", "time": utc_now()})
@@ -830,9 +1083,19 @@ class Handler(BaseHTTPRequestHandler):
                     "computer_name": socket.gethostname(),
                     "port": self.server.pairing_port,
                     "scheme": self.server.pairing_scheme,
-                    "sync_token": self.server.config.sync_token,
+                    "server_id": self.server.database.server_id,
                     "certificate_sha256": self.server.certificate_sha256,
                     "addresses": local_addresses(),
+                })
+            elif path == "/api/v1/devices":
+                self._json(HTTPStatus.OK, {"devices": self.server.database.list_devices()})
+            elif path == "/api/v1/passkeys":
+                self._json(HTTPStatus.OK, {"passkeys": self.server.passkeys.list_credentials(self.headers.get("X-Admin-Session", ""))})
+            elif path == "/api/v1/connection":
+                self._json(HTTPStatus.OK, {
+                    "service": "receipt-sync", "protocol_version": 2,
+                    "server_id": self.server.database.server_id,
+                    "device": self.device,
                 })
             elif path == "/api/v1/summary":
                 self._json(HTTPStatus.OK, self.server.database.summary(month_or_current(query.get("month", [None])[0])))
@@ -845,7 +1108,8 @@ class Handler(BaseHTTPRequestHandler):
             elif path.startswith("/api/v1/receipts/"):
                 receipt_id = path.rsplit("/", 1)[-1]
                 receipt = self.server.database.get_receipt(receipt_id, include_raw=query.get("raw", ["0"])[0] == "1")
-                self._json(HTTPStatus.OK if receipt else HTTPStatus.NOT_FOUND, receipt or {"error": "receipt not found"})
+                self._json(HTTPStatus.OK if receipt else HTTPStatus.NOT_FOUND,
+                           self._receipt_response(receipt) if receipt else {"error": "receipt not found"})
             else:
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
         except (ValueError, KeyError) as error:
@@ -856,6 +1120,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path == "/api/v1/pairing/redeem":
+            self._redeem_pairing()
+            return
+        if path.startswith("/api/v1/auth/"):
+            self._handle_passkey(path)
+            return
         if not path.startswith("/api/v1/") or not self._require_auth(path):
             self.close_connection = True
             if not path.startswith("/api/v1/"):
@@ -863,7 +1133,28 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             body = self._read_json()
-            if path == "/api/v1/receipts":
+            if path == "/api/v1/devices":
+                self.server.passkeys.require_fresh(self.headers.get("X-Admin-Session", ""))
+                self._json(HTTPStatus.CREATED, self.server.database.create_device(body.get("name"), body.get("role", "contributor")))
+            elif path == "/api/v1/pairing/invitations":
+                self.server.passkeys.require_fresh(self.headers.get("X-Admin-Session", ""))
+                if self.server.pairing_scheme != "https":
+                    raise ValueError("请启动正式 HTTPS 服务后生成邀请。")
+                import segno
+                addresses = local_addresses()
+                if not addresses:
+                    raise ValueError("未发现局域网地址，请先连接 Wi-Fi 或个人热点。")
+                invitation = self.server.pairing.create(body.get("name"), body.get("role", "contributor"))
+                payload = {"version": 1, "server_id": self.server.database.server_id,
+                           "addresses": [f"https://{ip}:{self.server.pairing_port}" for ip in addresses[:6]],
+                           "certificate_sha256": self.server.certificate_sha256,
+                           "invitation_token": invitation["invitation_token"], "expires_at": invitation["expires_at"]}
+                encoded = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode().rstrip("=")
+                uri = "receiptsync://pair?data=" + encoded
+                qr = segno.make_qr(uri, error="m").svg_data_uri(scale=4, border=4)
+                self._json(HTTPStatus.CREATED, {"id": invitation["id"], "expires_at": invitation["expires_at"],
+                                                "invitation": uri, "qr": qr})
+            elif path == "/api/v1/receipts":
                 self._upload_receipt(body)
             elif path.startswith("/api/v1/receipts/") and path.endswith("/confirm"):
                 receipt_id = path.split("/")[-2]
@@ -878,14 +1169,79 @@ class Handler(BaseHTTPRequestHandler):
                     self.server.worker.submit(receipt_id)
                     self._json(HTTPStatus.ACCEPTED, self.server.database.get_receipt(receipt_id))
             elif path == "/api/v1/transactions":
-                self._json(HTTPStatus.CREATED, self.server.database.add_transaction(body))
+                if "id" in body and not re.fullmatch(rf"manual-{UUID_PATTERN.pattern}", str(body["id"])):
+                    raise ValueError("manual transaction id must use manual-<UUID>")
+                transaction = self.server.database.add_transaction(body)
+                self._json(HTTPStatus.CREATED, {"id": transaction["id"]} if self.device else transaction)
             else:
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+        except RequestConflict as error:
+            self._json(HTTPStatus.CONFLICT, {"error": str(error)})
         except (ValueError, KeyError, json.JSONDecodeError) as error:
             self._json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
         except Exception:
             traceback.print_exc()
             self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "internal server error"})
+
+    def _redeem_pairing(self) -> None:
+        if self.server.scheme != "https" or self.headers.get("Origin"):
+            self.close_connection = True
+            self._json(HTTPStatus.FORBIDDEN, {"error": "pairing requires the native HTTPS client"})
+            return
+        if self.server.auth_rate_limited(self.client_address[0]):
+            self.close_connection = True
+            self._json(HTTPStatus.TOO_MANY_REQUESTS, {"error": "too many pairing attempts"})
+            return
+        try:
+            body = self._read_json(max_bytes=4096)
+            result = self.server.pairing.redeem(body.get("invitation_token"), body.get("device_token"),
+                                                body.get("claim_id"), body.get("server_id"))
+            self._json(HTTPStatus.OK, result)
+        except (ValueError, TypeError, KeyError):
+            self.server.record_auth_failure(self.client_address[0])
+            self._json(HTTPStatus.BAD_REQUEST, {"error": "邀请无效、已使用或已过期。请在电脑生成新邀请。"})
+
+    def _handle_passkey(self, path: str) -> None:
+        if not self._passkey_origin_valid():
+            self.close_connection = True
+            self._json(HTTPStatus.FORBIDDEN, {"error": "Passkey operations require the local management origin"})
+            return
+        if self.server.auth_rate_limited(self.client_address[0]):
+            self.close_connection = True
+            self._json(HTTPStatus.TOO_MANY_REQUESTS, {"error": "too many failed authentication attempts"})
+            return
+        session = self.headers.get("X-Admin-Session", "")
+        manager = self.server.passkeys
+        try:
+            body = self._read_json(max_bytes=128 * 1024)
+            if path == "/api/v1/auth/register/options":
+                result = manager.registration_options(self._admin_origin, session, body.get("name", "管理员 Passkey"))
+            elif path == "/api/v1/auth/login/options":
+                result = manager.authentication_options(self._admin_origin)
+            elif path in ("/api/v1/auth/register/verify", "/api/v1/auth/login/verify"):
+                kind = "register" if "/register/" in path else "authenticate"
+                result = manager.verify(kind, body["challenge_id"], body["credential"], self._admin_origin, session)
+            elif path == "/api/v1/auth/logout":
+                manager.logout(session)
+                result = {"locked": True}
+            elif path == "/api/v1/auth/passkeys/revoke":
+                result = manager.revoke(body.get("id"), session)
+            elif path == "/api/v1/auth/recovery/rotate":
+                result = manager.rotate_recovery(session)
+            elif path == "/api/v1/auth/recover":
+                result = manager.recover(body.get("code"))
+            else:
+                self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                return
+            self._json(HTTPStatus.OK, result)
+        except PasskeyError as error:
+            # These are deliberately authored, credential-free user messages.
+            # Library/parser exceptions still use the generic response below.
+            self.server.record_auth_failure(self.client_address[0])
+            self._json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
+        except (ValueError, KeyError, TypeError):
+            self.server.record_auth_failure(self.client_address[0])
+            self._json(HTTPStatus.BAD_REQUEST, {"error": "Passkey 验证失败或请求已过期，请重试。"})
 
     def do_DELETE(self) -> None:
         path = urlparse(self.path).path
@@ -894,7 +1250,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
         try:
-            if path.startswith("/api/v1/receipts/"):
+            if path.startswith("/api/v1/devices/"):
+                deleted = self.server.database.revoke_device(path.rsplit("/", 1)[-1])
+            elif path.startswith("/api/v1/pairing/invitations/"):
+                deleted = self.server.pairing.cancel(path.rsplit("/", 1)[-1])
+            elif path.startswith("/api/v1/receipts/"):
                 receipt_id = path.rsplit("/", 1)[-1]
                 deleted = self.server.database.delete_receipt(receipt_id)
             elif path.startswith("/api/v1/transactions/"):
@@ -914,8 +1274,26 @@ class Handler(BaseHTTPRequestHandler):
             self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "internal server error"})
 
     def _upload_receipt(self, body: dict[str, Any]) -> None:
+        with self.server.database.receipt_lock:
+            self._upload_receipt_locked(body)
+
+    def _receipt_response(self, receipt: dict[str, Any]) -> dict[str, Any]:
+        if not self.device:
+            return receipt
+        # Device responses never contain OCR text, parsed payloads, filesystem paths or ledger rows.
+        transaction = receipt.get("transaction")
+        return {
+            "id": receipt["id"], "status": receipt["status"],
+            "error": "识别失败，请在电脑上重新识别" if receipt.get("error") else None,
+            "transaction": {"merchant": transaction["merchant"], "amount_cents": transaction["amount_cents"]} if transaction else None,
+        }
+
+    def _upload_receipt_locked(self, body: dict[str, Any]) -> None:
         receipt_id = canonical_receipt_id(body.get("id") or uuid.uuid4())
-        device_id = _bounded_text(body.get("device_id", "iphone"), "device_id", 100, allow_empty=False)
+        if self.server.database.receipt_deleted(receipt_id):
+            self._json(HTTPStatus.GONE, {"error": "receipt was deleted"})
+            return
+        device_id = self.device["id"] if self.device else _bounded_text(body.get("device_id", "pc"), "device_id", 100, allow_empty=False)
         captured_at = _iso_datetime(body.get("captured_at", utc_now()), "captured_at")
         encoded_image = body.get("image_base64")
         if not isinstance(encoded_image, str):
@@ -932,18 +1310,18 @@ class Handler(BaseHTTPRequestHandler):
         image_path = (self.server.images_dir / f"{receipt_id}{suffix}").resolve()
         if image_path.parent != self.server.images_dir.resolve():
             raise ValueError("invalid receipt image path")
-        if not image_path.exists():
-            image_path.write_bytes(image_data)
+        existing = self.server.database.get_receipt(receipt_id)
+        if existing:
+            if Path(existing["image_path"]).read_bytes() != image_data or existing["captured_at"] != captured_at:
+                raise RequestConflict("receipt ID was already used with different data")
+            self._json(HTTPStatus.ACCEPTED, self._receipt_response(existing))
+            return
+        image_path.write_bytes(image_data)
         created = self.server.database.create_receipt(receipt_id, device_id, captured_at, str(image_path))
         if created:
             self.server.worker.submit(receipt_id)
-        else:
-            existing = self.server.database.get_receipt(receipt_id)
-            if existing and existing["status"] == "error":
-                self.server.database.set_receipt_status(receipt_id, "queued")
-                self.server.worker.submit(receipt_id)
         receipt = self.server.database.get_receipt(receipt_id)
-        self._json(HTTPStatus.ACCEPTED, receipt)
+        self._json(HTTPStatus.ACCEPTED, self._receipt_response(receipt))
 
 
 def main() -> None:
@@ -980,7 +1358,7 @@ def main() -> None:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.minimum_version = ssl.TLSVersion.TLSv1_2
         context.load_cert_chain(certfile=cert_path, keyfile=key_path)
-        server.socket = context.wrap_socket(server.socket, server_side=True)
+        server.configure_tls(context)
         certificate_pem = cert_path.read_text(encoding="ascii")
         certificate_der = ssl.PEM_cert_to_DER_cert(certificate_pem)
         server.certificate_sha256 = hashlib.sha256(certificate_der).hexdigest().upper()
@@ -1013,11 +1391,9 @@ def main() -> None:
         )
         review_thread.start()
     print("Receipt Sync is running", flush=True)
-    review_url = f"http://127.0.0.1:{args.review_port}" if args.review_port else f"{server.scheme}://127.0.0.1:{config.port}"
+    review_url = f"http://localhost:{args.review_port}" if args.review_port else f"{server.scheme}://localhost:{config.port}"
     print(f"Computer review: {review_url}", flush=True)
-    print(f"iPhone sync token: {config.sync_token}", flush=True)
-    if server.certificate_sha256 and server.scheme == "https":
-        print(f"Certificate SHA-256: {server.certificate_sha256}", flush=True)
+    print("Pair each device from the local computer review page.", flush=True)
     print(f"Data: {config.data_dir}", flush=True)
     try:
         server.serve_forever()
@@ -1030,6 +1406,7 @@ def main() -> None:
         if review_thread:
             review_thread.join(timeout=5)
         server.server_close()
+        server.worker.stop()
 
 
 if __name__ == "__main__":

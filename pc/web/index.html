@@ -79,6 +79,8 @@
     .item-grid { display: grid; grid-template-columns: minmax(0, 1fr) 130px; gap: 8px; margin-bottom: 8px; }
     .notice { padding: 10px 12px; background: var(--amber-soft); color: #6f511c; border-radius: 5px; margin-bottom: 14px; }
     code { overflow-wrap: anywhere; color: #175c58; }
+    [hidden] { display: none !important; }
+    #securityGate { width: min(100% - 40px, 680px); margin: 48px auto; padding: 28px; }
     @media (max-width: 760px) {
       .metrics { grid-template-columns: 1fr 1fr; }
       .two-column { grid-template-columns: 1fr; }
@@ -97,15 +99,31 @@
   <header>
     <div class="header-inner">
       <h1>小票同步中心</h1>
-      <div class="header-actions">
+      <div class="header-actions" id="adminActions" hidden>
         <button class="button" id="pairButton">手机配对</button>
         <button class="button" id="uploadButton">导入小票</button>
         <input id="receiptFile" type="file" accept="image/jpeg,image/png" hidden>
         <button class="button primary" id="manualButton">新增收支</button>
+        <button class="button" id="backupPasskeyButton">添加备用 Passkey</button>
+        <button class="button" id="securityButton">安全管理</button>
+        <button class="button" id="lockButton">锁定</button>
       </div>
     </div>
   </header>
-  <main>
+  <section class="panel" id="securityGate">
+    <h2>用 Passkey 保护这台 Mac 的账本</h2>
+    <p id="passkeyDescription">正在读取安全设置…</p>
+    <button class="button primary" id="unlockButton" disabled>用 Passkey 解锁</button>
+    <p class="status" id="passkeyMessage" role="status"></p>
+    <p class="status">Passkey 用于电脑管理和授权新设备。已授权设备仍可自动同步。管理页面只在这台 Mac 上开放，解锁有效期为 10 分钟。</p>
+    <details><summary>无法使用任何 Passkey？</summary>
+      <p>使用此前保存的离线恢复代码来添加替代 Passkey。不会清空账本；成功添加后代码失效。</p>
+      <input id="recoveryInput" type="password" autocomplete="off" placeholder="离线恢复代码">
+      <button class="button" id="recoverButton">验证恢复代码</button>
+      <button class="button" id="finishRecoveryButton" hidden>继续添加替代 Passkey</button>
+    </details>
+  </section>
+  <main id="adminContent" hidden>
     <div class="toolbar">
       <div>
         <input class="month" id="month" type="month">
@@ -159,18 +177,44 @@
   </dialog>
 
   <dialog id="pairDialog">
-    <div class="dialog-head"><h2>iPhone 配对信息</h2><button class="button" data-close="pairDialog">关闭</button></div>
+    <div class="dialog-head"><h2>设备连接</h2><button class="button" data-close="pairDialog">关闭</button></div>
     <div class="dialog-body">
-      <div class="notice">电脑连 iPhone 热点时，只把 172.20.10.x 那条 HTTPS 地址填进手机，不要用校园网 IP。手机还会固定核对证书指纹。</div>
+      <div class="notice">多台设备可以连接这台电脑，共用同一本 HKD 账本。请使用当前网络对应的 HTTPS 地址，并为每台设备创建独立密钥。电脑需保持运行。</div>
       <p>电脑名称：<strong id="computerName">—</strong></p>
       <div>服务器地址：<div id="pairAddresses">—</div></div>
       <p>协议：<code id="pairScheme">—</code></p>
       <p>端口：<code id="pairPort">—</code></p>
-      <p>同步密钥：<code id="pairToken">—</code></p>
       <p>证书 SHA‑256：<code id="pairFingerprint">—</code></p>
+      <form id="deviceForm">
+        <div class="form-grid">
+          <label>设备名称<input name="name" maxlength="100" placeholder="例如：我的 iPhone" required></label>
+          <label>权限<select name="role"><option value="contributor">上传小票、记账和查看汇总</option><option value="viewer">只查看汇总</option></select></label>
+        </div>
+        <button class="button primary" type="submit" data-mode="qr">生成一次性二维码</button>
+        <button class="button" type="submit" data-mode="manual">手动创建设备密钥</button>
+      </form>
+      <div id="pairQRSection" hidden>
+        <p>在 iPhone「同步设置」内扫描。邀请三分钟后失效，只授权一台设备。</p>
+        <img id="pairQR" alt="一次性设备配对二维码" style="width:min(100%,360px);background:white">
+        <details><summary>无法扫描？复制邀请到 App</summary><textarea id="pairInvitation" readonly></textarea></details>
+      </div>
+      <p id="newDeviceCredential" hidden>请将此密钥填入对应设备的「同步设置」，然后点「测试并保存」。密钥只显示这一次：<code id="pairToken"></code></p>
+      <p id="deviceMessage" role="status"></p>
+      <h3>已授权设备</h3>
+      <div id="deviceList"></div>
     </div>
   </dialog>
 
+  <dialog id="securityDialog">
+    <div class="dialog-head"><h2>Passkey 与恢复</h2><button class="button" data-close="securityDialog">关闭</button></div>
+    <div class="dialog-body">
+      <p>建议保存两个独立 Passkey。撤销会立即结束该 Passkey 的全部管理会话；不能删除最后一个。</p>
+      <div id="passkeyList"></div>
+      <button class="button" id="recoveryCodeButton">生成新的离线恢复代码</button>
+      <p>新代码会替代旧代码。请保存在离线安全位置或密码管理器；只显示一次，不要与设备配对密钥混用。</p>
+      <code id="recoveryCode"></code><p id="securityMessage" role="status"></p>
+    </div>
+  </dialog>
   <dialog id="reviewDialog">
     <div class="dialog-head"><h2>审核小票</h2><button class="button" data-close="reviewDialog">关闭</button></div>
     <form id="reviewForm">
@@ -198,6 +242,149 @@
     const money = (cents) => new Intl.NumberFormat('zh-HK', { style: 'currency', currency: 'HKD' }).format((cents || 0) / 100);
     const escapeHtml = (value) => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
     let activeReceipt = null;
+    let adminSession = '';
+    let registeredPasskey = false;
+    let invitationID = null;
+    let invitationTimer;
+    let lockTimer;
+
+    async function showSecurityGate() {
+      adminSession = '';
+      clearTimeout(lockTimer);
+      $('#adminActions').hidden = true;
+      $('#adminContent').hidden = true;
+      $('#securityGate').hidden = false;
+      document.querySelectorAll('dialog[open]').forEach(dialog => dialog.close());
+      $('#pairToken').textContent = '';
+      $('#pairFingerprint').textContent = '';
+      $('#passkeyList').textContent = '';
+      $('#recoveryCode').textContent = '';
+      $('#recoveryInput').value = '';
+      $('#finishRecoveryButton').hidden = true;
+      clearInvitation();
+      $('#pairAddresses').textContent = '';
+      $('#pairFingerprint').textContent = '';
+      $('#reviewWarnings').textContent = '';
+      $('#reviewItems').textContent = '';
+      $('#deviceList').textContent = '';
+      for (const id of ['transactions', 'receipts', 'expenseCategories', 'incomeCategories']) $("#" + id).textContent = '';
+      for (const id of ['income', 'expense', 'balance', 'pending']) $("#" + id).textContent = '—';
+      document.querySelectorAll('form').forEach(form => form.reset());
+      activeReceipt = null;
+      try {
+        const status = await api('/api/v1/auth/status');
+        registeredPasskey = status.registered;
+        $('#unlockButton').textContent = status.registered ? '用 Passkey 解锁' : '创建管理员 Passkey';
+        $('#unlockButton').disabled = !status.available || !window.PublicKeyCredential;
+        $('#passkeyDescription').textContent = status.registered
+          ? '请使用已有 Passkey 解锁。可以通过 Touch ID、设备解锁或安全密钥验证。'
+          : '首次设置：在此 Mac 上创建管理员 Passkey，然后为每台手机创建独立连接密钥。';
+        if (!status.available) $('#passkeyMessage').textContent = '请先安装电脑端的 Passkey 依赖，再重新启动服务。';
+        else if (!window.PublicKeyCredential) $('#passkeyMessage').textContent = '请在支持 Passkey 的 Safari 或 Chrome 中打开此 localhost 页面。';
+      } catch (error) { $('#passkeyMessage').textContent = error.message; }
+    }
+
+    const decodeBase64url = value => {
+      const base64 = value.replace(/-/g, '+').replace(/_/g, '/');
+      return Uint8Array.from(atob(base64.padEnd(Math.ceil(base64.length / 4) * 4, '=')), c => c.charCodeAt(0));
+    };
+    const encodeBase64url = value => btoa(Array.from(new Uint8Array(value), byte => String.fromCharCode(byte)).join('')).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    function credentialJSON(credential) {
+      const response = { clientDataJSON: encodeBase64url(credential.response.clientDataJSON) };
+      for (const key of ['attestationObject', 'authenticatorData', 'signature', 'userHandle']) {
+        if (credential.response[key]) response[key] = encodeBase64url(credential.response[key]);
+      }
+      if (credential.response.getTransports) response.transports = credential.response.getTransports();
+      return { id:credential.id, rawId:encodeBase64url(credential.rawId), type:credential.type, response,
+               clientExtensionResults:credential.getClientExtensionResults() };
+    }
+    async function usePasskey(register, name = '管理员 Passkey') {
+      const action = register ? 'register' : 'login';
+      const offered = await api(`/api/v1/auth/${action}/options`, { method:'POST', body:JSON.stringify({ name }) });
+      const publicKey = offered.options;
+      publicKey.challenge = decodeBase64url(publicKey.challenge);
+      if (publicKey.user) publicKey.user.id = decodeBase64url(publicKey.user.id);
+      for (const key of ['excludeCredentials', 'allowCredentials']) {
+        if (publicKey[key]) publicKey[key] = publicKey[key].map(item => ({ ...item, id:decodeBase64url(item.id) }));
+      }
+      const credential = register ? await navigator.credentials.create({ publicKey }) : await navigator.credentials.get({ publicKey });
+      if (!credential) throw new Error('Passkey 验证已取消。');
+      const verified = await api(`/api/v1/auth/${action}/verify`, {
+        method:'POST', body:JSON.stringify({ challenge_id:offered.challenge_id, credential:credentialJSON(credential) })
+      });
+      adminSession = verified.admin_session;
+      registeredPasskey = true;
+      clearTimeout(lockTimer);
+      lockTimer = setTimeout(showSecurityGate, verified.expires_in * 1000);
+      $('#securityGate').hidden = true;
+      $('#adminActions').hidden = false;
+      $('#adminContent').hidden = false;
+      await refresh();
+    }
+    $('#unlockButton').addEventListener('click', async () => {
+      $('#unlockButton').disabled = true;
+      $('#passkeyMessage').textContent = '';
+      try { await usePasskey(!registeredPasskey); }
+      catch (error) { $('#passkeyMessage').textContent = error.name === 'NotAllowedError' ? '验证已取消或超时，请重试。' : error.message; }
+      finally { $('#unlockButton').disabled = false; }
+    });
+    $('#backupPasskeyButton').addEventListener('click', async () => {
+      const name = prompt('为备用 Passkey 命名（例如：备用安全密钥）', '备用 Passkey');
+      if (!name) return;
+      $('#backupPasskeyButton').disabled = true;
+      try { await usePasskey(false); await usePasskey(true, name); $('#status').textContent = '备用 Passkey 已添加。'; }
+      catch (error) { $('#status').textContent = `未添加备用 Passkey：${error.message}`; }
+      finally { $('#backupPasskeyButton').disabled = false; }
+    });
+    $('#lockButton').addEventListener('click', async () => {
+      await clearInvitation();
+      try { await api('/api/v1/auth/logout', { method:'POST', body:'{}' }); }
+      finally { await showSecurityGate(); }
+    });
+
+    async function refreshPasskeys() {
+      const { passkeys } = await api('/api/v1/passkeys');
+      $('#passkeyList').innerHTML = passkeys.map(key => `<p>${escapeHtml(key.name)} ${key.current ? '（当前会话）' : ''} · ${key.revoked_at ? '已撤销' : '有效'}
+        ${key.revoked_at ? '' : `<button class="button" data-revoke-passkey="${escapeHtml(key.id)}">撤销 Passkey</button>`}</p>`).join('');
+    }
+    $('#securityButton').addEventListener('click', async () => {
+      try { await refreshPasskeys(); $('#securityDialog').showModal(); }
+      catch (error) { $('#status').textContent = error.message; }
+    });
+    $('#passkeyList').addEventListener('click', async event => {
+      const button = event.target.closest('[data-revoke-passkey]');
+      if (!button || !confirm('撤销此 Passkey 及其管理会话？账本和设备记录不会被删除。')) return;
+      const id = button.dataset.revokePasskey;
+      try {
+        await usePasskey(false);
+        const result = await api('/api/v1/auth/passkeys/revoke', { method:'POST', body:JSON.stringify({ id }) });
+        if (result.locked) await showSecurityGate();
+        else { await refreshPasskeys(); $('#securityMessage').textContent = 'Passkey 已撤销。'; }
+      } catch (error) { $('#securityMessage').textContent = error.message; }
+    });
+    $('#recoveryCodeButton').addEventListener('click', async () => {
+      if (!confirm('生成新恢复代码？旧代码将立即失效。')) return;
+      try {
+        await usePasskey(false);
+        const result = await api('/api/v1/auth/recovery/rotate', { method:'POST', body:'{}' });
+        if ($('#securityDialog').open) $('#recoveryCode').textContent = result.recovery_code;
+      } catch (error) { $('#securityMessage').textContent = error.message; }
+    });
+    $('#securityDialog').addEventListener('close', () => { $('#recoveryCode').textContent = ''; });
+    async function finishRecovery() {
+      try { await usePasskey(true, '恢复后的 Passkey'); $('#finishRecoveryButton').hidden = true; }
+      catch (error) { $('#passkeyMessage').textContent = '未完成添加。可继续重试；成功添加之前恢复代码仍有效。'; }
+    }
+    $('#recoverButton').addEventListener('click', async () => {
+      try {
+        const result = await api('/api/v1/auth/recover', { method:'POST', body:JSON.stringify({ code:$('#recoveryInput').value.trim() }) });
+        $('#recoveryInput').value = '';
+        adminSession = result.admin_session;
+        $('#finishRecoveryButton').hidden = false;
+        await finishRecovery();
+      } catch (error) { $('#passkeyMessage').textContent = error.message; }
+    });
+    $('#finishRecoveryButton').addEventListener('click', finishRecovery);
 
     function localMonth() {
       const d = new Date();
@@ -218,13 +405,23 @@
       return `<span class="badge ${escapeHtml(status)}">${labels[status] || escapeHtml(status)}</span>`;
     }
     async function api(path, options = {}) {
+      const requestedSession = adminSession;
       const { headers = {}, ...requestOptions } = options;
-      const response = await fetch(path, { ...requestOptions, headers: { 'Content-Type': 'application/json', ...headers } });
+      const response = await fetch(path, { ...requestOptions, headers: {
+        'Content-Type': 'application/json', ...(adminSession ? { 'X-Admin-Session':adminSession } : {}), ...headers
+      } });
       const body = await response.json();
+      if (requestedSession !== adminSession) throw new Error('管理会话已变更，请重试。');
+      if (body.code === 'passkey_required') {
+        $('#passkeyMessage').textContent = '管理页面已锁定，请重新验证 Passkey。';
+        await showSecurityGate();
+      }
       if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
       return body;
     }
     async function refresh() {
+      if (!adminSession) return;
+      const requestedSession = adminSession;
       $('#status').textContent = '正在同步…';
       try {
         const month = $('#month').value || localMonth();
@@ -233,6 +430,7 @@
           api(`/api/v1/transactions?month=${encodeURIComponent(month)}`),
           api('/api/v1/receipts?limit=50')
         ]);
+        if (requestedSession !== adminSession) return;
         $('#income').textContent = money(summary.income_cents);
         $('#expense').textContent = money(summary.expense_cents);
         $('#balance').textContent = money(summary.balance_cents);
@@ -394,6 +592,11 @@
       }
     });
     $('#pairButton').addEventListener('click', async () => {
+      const requestedSession = adminSession;
+      $('#pairToken').textContent = '';
+      $('#newDeviceCredential').hidden = true;
+      $('#deviceMessage').textContent = '';
+      try {
       const pairing = await api('/api/v1/pairing');
       $('#computerName').textContent = pairing.computer_name;
       const addresses = pairing.addresses || [];
@@ -406,16 +609,85 @@
         : '<p>未发现局域网地址</p>';
       $('#pairScheme').textContent = pairing.scheme;
       $('#pairPort').textContent = pairing.port;
-      $('#pairToken').textContent = pairing.sync_token;
       $('#pairFingerprint').textContent = pairing.certificate_sha256;
+      $('#deviceForm').querySelectorAll('button').forEach(button => { button.disabled = pairing.scheme !== 'https'; });
+      if (pairing.scheme !== 'https') $('#deviceMessage').textContent = '当前为本机测试服务。请启动正式 HTTPS 服务后再配对设备。';
+      await refreshDevices();
+      if (!adminSession || requestedSession !== adminSession) return;
       $('#pairDialog').showModal();
+      } catch (error) { $('#status').textContent = `无法读取设备信息：${error.message}`; }
     });
+    async function refreshDevices() {
+      const { devices } = await api('/api/v1/devices');
+      $('#deviceList').innerHTML = devices.map(device => `<p>
+        <strong>${escapeHtml(device.name)}</strong> · ${device.role === 'viewer' ? '只读汇总' : '记账设备'}
+        · ${device.revoked_at ? '已撤销' : (device.last_seen_at ? `最近连接 ${escapeHtml(new Date(device.last_seen_at).toLocaleString())}` : '尚未连接')}
+        ${device.revoked_at ? '' : `<button type="button" class="button" data-revoke-device="${escapeHtml(device.id)}">撤销访问</button>`}
+      </p>`).join('') || '<p>尚未添加设备。</p>';
+    }
+    $('#deviceForm').addEventListener('submit', async event => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const mode = event.submitter?.dataset.mode || 'qr';
+      const values = { name:form.elements.name.value, role:form.elements.role.value };
+      const buttons = form.querySelectorAll('button');
+      buttons.forEach(button => { button.disabled = true; });
+      try {
+        await clearInvitation();
+        await usePasskey(false);
+        const device = await api(mode === 'qr' ? '/api/v1/pairing/invitations' : '/api/v1/devices', { method:'POST', body:JSON.stringify(values) });
+        if (!$('#pairDialog').open) return;
+        $('#pairToken').textContent = '';
+        $('#newDeviceCredential').hidden = mode === 'qr';
+        if (mode === 'qr') {
+          invitationID = device.id;
+          $('#pairQR').src = device.qr;
+          $('#pairInvitation').value = device.invitation;
+          $('#pairQRSection').hidden = false;
+          invitationTimer = setTimeout(clearInvitation, Math.max(0, device.expires_at * 1000 - Date.now()));
+          $('#deviceMessage').textContent = '请在三分钟内用对应手机扫描；关闭此窗口会取消未使用邀请。';
+        } else {
+          $('#pairToken').textContent = device.sync_token;
+          $('#deviceMessage').textContent = `已为 ${device.name} 创建独立密钥。`;
+        }
+        form.reset();
+        await refreshDevices();
+      } catch (error) { $('#deviceMessage').textContent = error.message; }
+      finally { buttons.forEach(button => { button.disabled = false; }); }
+    });
+    $('#deviceList').addEventListener('click', async event => {
+      const button = event.target.closest('[data-revoke-device]');
+      if (!button || !confirm('撤销后，该设备将无法连接。账目和小票会保留。确定撤销？')) return;
+      button.disabled = true;
+      try {
+        await api(`/api/v1/devices/${encodeURIComponent(button.dataset.revokeDevice)}`, { method:'DELETE' });
+        $('#deviceMessage').textContent = '已撤销设备访问，账目未改动。';
+        await refreshDevices();
+      } catch (error) { $('#deviceMessage').textContent = error.message; button.disabled = false; }
+    });
+    $('#pairDialog').addEventListener('close', () => {
+      clearInvitation();
+      $('#pairToken').textContent = '';
+      $('#newDeviceCredential').hidden = true;
+    });
+    async function clearInvitation() {
+      clearTimeout(invitationTimer);
+      const id = invitationID;
+      invitationID = null;
+      $('#pairQR').removeAttribute('src');
+      $('#pairInvitation').value = '';
+      $('#pairQRSection').hidden = true;
+      if (id && adminSession) {
+        try { await api(`/api/v1/pairing/invitations/${encodeURIComponent(id)}`, { method:'DELETE' }); }
+        catch { /* It may already have been consumed, expired or invalidated by locking. */ }
+      }
+    }
     $('#manualButton').addEventListener('click', () => { $('#manualForm').date.value = new Date().toISOString().slice(0,10); $('#manualDialog').showModal(); });
     $('#refreshButton').addEventListener('click', refresh);
     $('#month').addEventListener('change', refresh);
     document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => document.getElementById(button.dataset.close).close()));
     $('#month').value = localMonth();
-    refresh();
+    showSecurityGate();
     setInterval(refresh, 15000);
   </script>
 </body>

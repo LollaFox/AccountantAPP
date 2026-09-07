@@ -11,6 +11,10 @@ $ErrorActionPreference = "Stop"
 if (-not (Test-Path -LiteralPath $Python)) {
     throw "PaddleOCR Python was not found: $Python"
 }
+& $Python -c "import webauthn, segno"
+if ($LASTEXITCODE -ne 0) {
+    throw "Install Passkey support with this Python: -m pip install -r pc/requirements-server.txt"
+}
 
 $certificateDirectory = Join-Path $DataDir "tls"
 $certificatePath = Join-Path $certificateDirectory "receipt-sync-cert.pem"
@@ -22,7 +26,7 @@ if (-not (Test-Path -LiteralPath $certificatePath) -or -not (Test-Path -LiteralP
 
 $serverScript = "$PSScriptRoot\receipt_sync_server.py"
 
-Write-Host "Computer review: http://127.0.0.1:$ReviewPort"
+Write-Host "Computer review: http://localhost:$ReviewPort (Passkey required)"
 Write-Host "iPhone HTTPS port: $Port"
 Write-Host "If the iPhone is the hotspot, copy the https://172.20.10.x:$Port address from the pairing page."
 try {

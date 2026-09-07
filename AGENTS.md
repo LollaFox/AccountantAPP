@@ -2,6 +2,8 @@
 
 本文档供接手本项目的编码 agent 使用，尤其是将在 Mac 上继续开发 iPhone 客户端和电脑端的 agent。它记录了截至 2026-09-04 的需求对话、技术选择、完成状态、运行方法、安全边界和下一步。面向普通用户的简明说明仍以 `README.md` 为准。
 
+**2026-09-07 更新：** 已按用户要求改为一台 Mac / 多设备独立凭证，并实现本机 `localhost` 管理 Passkey、单次二维码邀请和离线恢复。下文带 2026-09-04 日期的验收结论是历史记录；当前连接/安全行为以第 16 节、`README.md` 与 `docs/connection-verification.md` 为准，不要恢复旧共享凭证展示或无 Passkey 管理访问。
+
 ## 1. 工作目录和事实来源
 
 - 当前 Mac 工作副本的源码根目录就是本文件所在目录。这是 Git 仓库。
@@ -34,7 +36,7 @@
 16. 暂不打包，不需要 `.ipa` 或安装包；先在本机与真机开发环境测试。
 17. 暂不设计外出访问、Tailscale 或 VPN。手机与电脑只考虑同一局域网；大学公共 Wi-Fi 可能有客户端隔离，必要时使用 iPhone 个人热点做直连测试。
 18. 公共 Wi-Fi 上必须有安全措施。当前使用 HTTPS、自签名证书指纹固定和受限随机设备令牌；电脑审核管理面仅监听回环地址。
-19. 用户提出可以尝试 Passkey。结论是当前不实现：变化的局域网 IP 缺少稳定的 WebAuthn relying-party 域名，且后台同步不应每次要求 Face ID。若以后有稳定 HTTPS 域名或中转服务，可用 Passkey 做首次配对或管理授权，再签发受限设备凭证。
+19. 早期因变化的局域网 IP 暂缓 Passkey。2026-09-07 用户明确要求实现，已改用稳定的 `localhost` RP 保护本机管理及设备授权；手机后台同步继续使用受限独立凭证，不以 LAN IP 作为 RP。
 20. Paddle 模型不能每次测试都下载到新缓存。正式服务和临时测试必须复用 Windows 的 `%LOCALAPPDATA%\ReceiptSync\paddle_models` 或 macOS 的 `~/Library/Application Support/ReceiptSync/paddle_models`；只有显式升级模型或手工删除缓存时才重新下载。
 21. 2026-09-04：用户要求在 Mac 上做一份电脑端（原 Windows PC part）的副本，以便同一台 Mac 既能跑审核/OCR 服务，又能用 Xcode 装 iPhone 客户端。结论是不复制 Python 账务/API 代码，只为 macOS 增加启动、证书和 Paddle 安装脚本，并与 Windows 共用 `pc/receipt_sync_server.py`、`pc/receipt_parser.py` 和 `pc/web/index.html`。换电脑或换系统后必须重新配对 iPhone，不要迁移 Windows 的 `config.json`、TLS 私钥或令牌。
 22. 根目录曾同时有 `start-service.command` 和 `start-service.sh`。二者都只是调用 `pc/start.sh`。用户确认 `.command` 留给 Finder 双击，`.sh` 与 `./pc/start.sh` 重复，已删除 `start-service.sh`。
@@ -44,7 +46,7 @@
 ### Windows 电脑端
 
 - 一个 Python 进程同时提供两个监听器和一个共享 OCR worker。
-- `http://127.0.0.1:8764` 是仅限本机的审核管理页。
+- `http://localhost:8764` 是仅限本机、需 Passkey 解锁的审核管理页；`127.0.0.1` 跳转至该标准来源。
 - `https://0.0.0.0:8765` 是 iPhone 加密同步接口；实际配对地址使用审核页检测到的局域网 IP。
 - PaddleOCR 异步识别，结果在电脑端人工确认后才进入总收支。
 - SQLite 保存小票、总流水和商品明细；原图保存在数据目录。
@@ -147,6 +149,7 @@
 
 手机请求使用 `X-Sync-Token`。远程设备令牌只允许：
 
+- `GET /api/v1/connection`：协议版本、持久服务器 UUID、当前设备身份/权限（需鉴权）。
 - `POST /api/v1/receipts`：上传 JPEG/PNG 小票，单张 32 字节至 12 MB。
 - `GET /api/v1/receipts/<已知 UUID>`：查看这张手机已知小票的状态；不得带 `raw=1`。
 - `GET /api/v1/summary?month=YYYY-MM`：读取大类汇总。
@@ -158,7 +161,7 @@
 - 确认、重新识别、删除小票或删除流水。
 - 电脑审核页面。
 
-只有本机回环连接且 Host 为 `localhost` 或回环 IP 时才能使用管理能力。不要为了方便 iPhone 调试而放宽这些边界。鉴权连续失败有速率限制；输入文本、金额、条目数和请求体大小均有限制。小票 ID 必须是规范 UUID，路径必须经过受管目录校验。
+管理 API 还必须持有 Passkey 签发的短时 `X-Admin-Session`；管理写入验证标准 `localhost` 完整 Origin。设备令牌即使来自回环也不提升为管理员。只读设备仅允许连接身份与汇总；二维码兑换仅在 HTTPS 上接受单次邀请证明，不开放管理能力。不要为了方便调试放宽这些边界。鉴权连续失败有速率限制；输入文本、金额、条目数和请求体大小均有限制。小票 ID 必须是规范 UUID，路径必须经过受管目录校验。
 
 注意：`/api/v1/health` 当前可匿名访问，用于连通性判断，但不得返回配置、版本细节、令牌、账目或个人数据。
 
@@ -175,8 +178,8 @@ C:\Users\15610\Documents\ChatGPT\DesktopAssistant\.venv-paddle\Scripts\python.ex
 1. 在 Windows 打开 `work/receipt-sync-app/`。
 2. 双击 `start-service.cmd`；也可在 PowerShell 中进入该目录后运行 `./pc/start.ps1`。
 3. 保持终端窗口开启。
-4. 浏览器打开 `http://127.0.0.1:8764`。
-5. 在“手机配对”中读取本次可用的 HTTPS 地址、同步密钥和证书 SHA-256 指纹。
+4. 浏览器打开 `http://localhost:8764`，创建或验证管理员 Passkey（先用服务 Python 安装 `pc/requirements-server.txt`）。
+5. 在“手机配对”中命名设备、选择权限，验证 Passkey 后生成单次二维码；手动设备密钥是备用方式。
 6. 停止服务时在终端按 `Ctrl+C`。
 
 正式默认路径：
@@ -196,8 +199,8 @@ Windows 防火墙只应按需要放行入站 TCP 8765。不要开放 8764。校�
 2. 若 `pc/.venv` 不存在，运行 `./pc/setup_macos.sh`。此 Mac 已于 2026-09-04 安装：PaddlePaddle CPU 3.2.1、PaddleOCR 3.7.0、Xcode 自带 Python 3.9。
 3. 运行 `./pc/start.sh`，或双击 `start-service.command`。不要恢复已删除的根目录 `start-service.sh`。
 4. 保持终端窗口开启。
-5. 浏览器打开 `http://127.0.0.1:8764`。
-6. 在“手机配对”中读取本次可用的 HTTPS 地址、同步密钥和证书 SHA-256 指纹。
+5. 浏览器打开 `http://localhost:8764`，创建或验证管理员 Passkey（旧环境先安装 `pc/requirements-server.txt`）。
+6. 在“手机配对”中命名设备、选择权限，验证 Passkey 后生成单次二维码；手动设备密钥是备用方式。
 7. 停止服务时在终端按 `Ctrl+C`。
 
 正式默认路径：
@@ -222,7 +225,7 @@ Windows 防火墙只应按需要放行入站 TCP 8765。不要开放 8764。校�
 5. 若 App 无法打开：设置 → 通用 → VPN与设备管理，信任该开发者。免费签名大约 7 天过期，再跑一次安装器即可。
 6. 备选：仍可用 Xcode 打开工程，选中该 iPhone 后按 Run。不要把 Team ID、令牌或指纹写进仓库。
 7. 若电脑端跑在同一台 Mac 上，启动 `./pc/start.sh`；若仍使用 Windows，则在 Windows 上启动 `start-service.cmd`。确保手机与电脑位于同一可互访局域网。
-8. 在 iPhone 应用“同步设置”中填写电脑配对页当时显示的完整 `https://<IP>:8765`、同步密钥和 64 位十六进制证书 SHA-256 指纹。
+8. 在 iPhone 应用“同步设置”扫描自己 Mac 上的单次二维码并确认；可粘贴邀请或手动填写当时的 HTTPS 地址、独立设备密钥及指纹。更换服务器必须明确忘记旧电脑；旧队列保留服务器绑定，不自动转移。
 
 建议按以下顺序验收：
 
@@ -310,12 +313,12 @@ xcodebuild test -project ios/ReceiptSync.xcodeproj -scheme ReceiptSync -configur
 - 模拟器热点测试没有覆盖拍小票上传、电脑确认后汇总更新、电脑删除后 404 清队列、断线重试。
 - macOS 电脑端尚未用真实小票跑完第一次 PaddleOCR（模型会在首次识别时下载到 `~/Library/Application Support/ReceiptSync/paddle_models`）。
 - 尚未接入 DeepSeek 或其他第三方商品分类服务。
-- 尚未实现 Passkey、外出同步、云中转、Tailscale 或 VPN。
+- 已实现本机管理 Passkey（见第 16 节）；仍未实现外出同步、云中转、Tailscale 或 VPN。
 - 尚未做 App Store / TestFlight / 付费账号分发。本机 USB 安装器已加上，但仍需用户在 Xcode 登录免费 Apple ID 并插上 iPhone 后才能完成第一次真机安装。
 
 后续若要接入 AI 分类，先明确数据是否允许离开电脑、供应商密钥如何保存、失败时的本地回退、费用和可审计性。默认应保持本地 PaddleOCR 和人工审核；不要让模型分类结果绕过人工确认，也不要把服务费或舍入重新拆成虚假商品。
 
-后续若要接入 Passkey，优先限定为“首次配对/管理授权”，并保留短权限设备凭证执行后台同步。只有在有稳定、可信的 HTTPS 域名和正确的 Associated Domains/WebAuthn RP 配置后再实现。
+Passkey 当前限定于稳定 `localhost` 来源的本机管理，不需要 iPhone Associated Domains。远程浏览器 Passkey 或原生 iPhone Passkey 仍是不同范围，需要另外设计可信域名与关联域；不得将现有本机来源检查放宽为变化的 LAN IP。
 
 ## 13. Agent 工作约束
 
@@ -388,3 +391,43 @@ xcodebuild test -project ios/ReceiptSync.xcodeproj -scheme ReceiptSync -configur
 - 没有改 Bundle Identifier / Apple Team；真机运行前仍需用户自己签名。
 - 2026-09-05：已加上免费 Apple ID 的 USB 安装器（`install-iphone.command` / `ios/install-iphone.sh`）。此 Mac 的 Xcode Accounts 仍为空，当时也没有插上 iPhone，因此安装器还不能代替用户完成第一次签名登录和真机安装。不要提交 `ios/install-local.env`。
 
+## 16. 2026-09-07：单 Mac / 多设备连接与安全重建
+
+用户已授权实现并进一步强化以下行为；不得按旧章节中的「尚无 Passkey」描述回退。
+
+### 身份、权限与本机管理
+
+- SQLite 持久保存服务器 UUID、独立设备身份/凭证哈希与撤销状态。`contributor` 可录入并查看汇总；`viewer` 仅查看连接身份和汇总。原共享密钥只迁移一次为旧版设备，撤销后不能因重启复活。
+- 管理页标准地址 `http://localhost:8764`；RP 为 `localhost`，验证完整 Origin、challenge、签名、user verification 和 user handle。禁止跨来源/iframe 验证；初次登记的多标签页竞态只允许一个初始管理员。
+- 管理会话仅存在内存，600 秒有效；challenge 90 秒、只能使用一次。签发设备邀请/手动凭证、添加或撤销 Passkey、生成恢复代码需要 60 秒内、一次性的新验证授权。设备凭证从回环发来也不能变成管理员。
+- `pc/receipt_passkeys.py` 支持 Passkey 命名、备用登记、列表与单独撤销。撤销使该钥匙签发的所有会话失效，拒绝删除最后一个有效 Passkey。
+- 离线恢复代码随机生成、只显示一次、数据库仅存哈希。恢复会话只能登记替代 Passkey，不能访问账本或配对设备。成功登记和消耗恢复代码处于同一个 SQLite 事务；取消登记不消耗代码。恢复后要撤销丢失的钥匙并重新生成代码。没有无认证重置/清空账本入口。
+- 服务依赖见 `pc/requirements-server.txt`：`webauthn==2.7.1`（兼容现有 Python 3.9）和 `segno==1.6.6`；升级环境时用服务 Python 安装。二维码完全本地生成，无云服务。
+
+### 单次二维码与手机连接
+
+- `pc/receipt_pairing.py` 的邀请有效期 180 秒、只能授权一个设备；关掉配对窗口取消未用邀请。QR 包含临时邀请、服务器 UUID、当前 HTTPS 地址和证书指纹，不包含长期设备密钥。
+- iPhone 先生成 256 位随机密钥和 claim UUID，并将完整待完成配对写入 Keychain，再经固定证书的 HTTPS 兑换。服务器事务原子绑定 claim、密钥哈希和设备；同一 claim/密钥可重试，另一个设备不能抢占已经兑换的邀请。
+- 同一已兑换 claim 可在原邀请到期后继续重试 300 秒；未兑换邀请没有这个宽限。超过窗口需重新生成邀请，已有但未完成本地保存的设备可在 Mac 核对/撤销。重试永不恢复已撤销设备。
+- `POST /api/v1/pairing/redeem` 仅接受 HTTPS 原生请求与邀请证明；拒绝浏览器 Origin。其他邀请/Passkey 管理端点仍仅限本机 Passkey 会话。
+- `PairingScanner.swift` 用 VisionKit 扫 QR；扫描只填入邀请，必须由用户确认才连接。无扫码能力时可粘贴邀请，手动地址/密钥/指纹方式仍保留。不自动处理外部 deep link、不扫描局域网、不引入 Bonjour/VPN/云中转。
+- `SyncClient` 使用复用的 ephemeral URLSession、严格叶证书 SHA-256、禁止重定向、协议版本 2 与服务器 UUID 握手。仅传输不可达错误可尝试下一个候选地址，证书/身份错误不得回退绕过。
+- `ReceiptStore` 将连接地址、密钥、证书、服务器身份作为一个 Keychain 配对记录保存；握手或保存失败保留原设置。旧队列保留原服务器绑定，换服务器不能静默搬迁账目。
+
+### 持久队列与故障恢复
+
+- 手工交易带稳定 UUID `request_id`；服务器以请求内容哈希防重，删除后仍保留去重确认。小票 UUID 重试校验原图/拍摄时间，删除墓碑返回 410，不能因重发复活。
+- iPhone 手工队列落盘后才接受新增；永久无效条目标为 `invalid`，允许用同一请求 ID 修正。`conflict` 条目必须先在 Mac 核对，不允许改内容盲重发；可以确认后仅移除本机队列。被拒绝条目不阻塞其他记录/汇总；认证、证书、网络和存储故障仍停止整轮。
+- 小票保留上传确认状态；断线后的不确定上传先查 UUID，再决定是否重发；已知上传的小票 404 或删除墓碑 410 清队列，已确认小票没有本地图片时仍能查状态。取消与同步并发有代次隔离。
+- TLS 握手放在最多 32 个连接的工作线程中，不在 accept 上阻塞。握手 5 秒、头部空闲 10 秒、请求体空闲 30 秒，整个请求绝对期限 60 秒；拒绝超额连接、不完整 body、重复 Content-Length 和 Transfer-Encoding。
+- OCR 启动从数据库恢复 `queued` / `processing`，提交去重；不重新处理已审核/确认或已删除记录。存储故障导致错误状态无法写入时不杀死共享 worker；持久待处理记录下次启动恢复。测试不得触发 Paddle 模型加载/重复下载。
+- CSV 各文件保持原子替换，从一致数据库快照导出；不是两个 CSV 的跨文件原子事务。写出失败保留上一个完整文件；重试同一已提交账务请求不重复入账。
+
+### 验证与交接
+
+- 新增 `pc/test_multi_device.py`、`pc/test_passkeys.py`、`pc/test_pairing.py`、`pc/test_resilience.py`、`ios/ReceiptSyncTests/ConnectionTests.swift`。覆盖权限、真实软件签名、恢复会话隔离、并发抢邀、过期、断线重试、慢 TLS、部分上传、强杀临时 OCR 子进程及磁盘失败。
+- `pc/verify_web_security.py` + `pc/test_web_security.cjs` 使用全新无头浏览器和虚拟验证器；不能使用个人浏览器配置或真实 Touch ID 来自动登记。
+- `ios/test_mac_connection.py` 建立临时 Mac HTTPS 服务，通过 `TEST_RUNNER_RECEIPT_SYNC_TEST_FIXTURE` 传递私有临时路径。测试真实 URLSession、证书拒绝、多设备账本、重复写入和实际 QR 图片解码/兑换。服务端验证账目/作业/设备数，防止 XCTest 默默 skip 被当作通过。
+- 模拟器上 Vision 硬件推理不可用，静态 QR 图片测试使用 Apple Core Image 软件解码；这不替代真机 VisionKit 相机扫码验收。
+- 当前完整结果与重跑命令见 `docs/connection-verification.md`。所有新测试使用临时账本/密钥，不使用正式数据或真实个人 Passkey。Windows 当前版本仍需在 Windows 上重跑；本轮测试主机是 Mac。
+- 仍需用户配合：真实 Mac Touch ID/Safari、iPhone 相机扫码/拍票、真机 Keychain/本地网络权限、真实 PaddleOCR→人工确认→删除闭环、机会性后台刷新。不要自动启动正式账本或替用户登记真实凭证来冒充这些验收已完成。

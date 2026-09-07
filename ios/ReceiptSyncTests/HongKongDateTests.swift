@@ -59,31 +59,18 @@ final class HongKongDateTests: XCTestCase {
         ))
     }
 
-    func testEmptyPairingFieldsKeepStoredTokenAndCertificate() {
-        let storedURL = "https://192.0.2.10:8765"
-        let storedToken = "kept-token"
-        let storedCert = String(repeating: "B", count: 64)
-        let remembered = PairingInput.rememberedDraft(
-            serverURL: "   ",
-            syncToken: "",
-            certificateSHA256: "",
-            storedURL: storedURL,
-            storedToken: storedToken,
-            storedCert: storedCert
-        )
-        XCTAssertEqual(remembered.serverURL, storedURL)
-        XCTAssertEqual(remembered.syncToken, storedToken)
-        XCTAssertEqual(remembered.certificateSHA256, storedCert)
-        let replaced = PairingInput.rememberedDraft(
-            serverURL: "https://192.0.2.20:8765",
-            syncToken: "new-token",
-            certificateSHA256: String(repeating: "C", count: 64),
-            storedURL: storedURL,
-            storedToken: storedToken,
-            storedCert: storedCert
-        )
-        XCTAssertEqual(replaced.syncToken, "new-token")
-        XCTAssertEqual(replaced.certificateSHA256, String(repeating: "C", count: 64))
+    func testPairingRejectsMalformedAddressesAndFingerprints() {
+        for value in ["https://", "http://192.0.2.10", "https://user:password@example.test",
+                      "https://example.test/api", "https://example.test?token=x", "https://example.test#path",
+                      "https://example.test:0", "https://example.test:70000", "https://example.test http://example.test"] {
+            XCTAssertTrue(PairingInput.candidateURLs(value).isEmpty, value)
+        }
+        let hex = String(repeating: "A", count: 64)
+        XCTAssertEqual(PairingInput.normalizedFingerprint(hex + "A"), "")
+        XCTAssertEqual(PairingInput.normalizedFingerprint("INVALID" + hex), "")
+        XCTAssertEqual(PairingInput.normalizedFingerprint(hex + "!"), "")
+        XCTAssertFalse(PairingInput.isReadyToSync(serverURL: "example.test", syncToken: "injected\r\nheader", certificateSHA256: hex))
+        XCTAssertEqual(PairingInput.candidateURLs("192.0.2.10 HTTPS://192.0.2.10:8765/"), ["https://192.0.2.10:8765"])
     }
 
     func testFailedComputerConnectionDoesNotReadAsSynced() {
@@ -93,7 +80,7 @@ final class HongKongDateTests: XCTestCase {
         )
         XCTAssertEqual(
             NetworkSyncMessage.display(URLError(.cancelled)),
-            SyncClient.SyncError.certificateRejected.errorDescription
+            SyncClient.SyncError.cancelled.errorDescription
         )
         XCTAssertNotEqual(NetworkSyncMessage.display(URLError(.cannotConnectToHost)), "已同步")
     }
